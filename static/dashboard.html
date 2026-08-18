@@ -68,6 +68,10 @@
   .ev-freq{ color:#ff9f4f; }
   .ev-cyclic{ color:var(--accent); }
   .empty-note{ color:var(--muted); font-style:italic; }
+
+  .kv-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:10px 18px; font-size:12px; }
+  .kv-grid .kv-label{ color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.5px; }
+  .kv-grid .kv-value{ font-family:var(--mono); font-size:14px; margin-top:2px; }
 </style>
 </head>
 <body>
@@ -83,7 +87,10 @@
 <div class="disclaimer">
   <b>Zastrzeżenie:</b> narzędzie badawczo-edukacyjne. NIE zastępuje certyfikowanego analizatora jakości energii
   ani nie jest urządzeniem pomiarowym zgodnym z IEC 61000-4-30. Progi oparte o typowe wartości EN 50160 -
-  przed użyciem produkcyjnym dostosuj do parametrów własnej instalacji.
+  przed użyciem produkcyjnym dostosuj do parametrów własnej instalacji. Prognoza kolejnego odczytu to prosta
+  ekstrapolacja statystyczna (nie sieć AI wytrenowana na realnych danych), a szacunek żywotności kabla to
+  uproszczony model inżynierski (I²R + reguła Montsingera) - obie funkcje pokazują TREND, nie certyfikowaną
+  ocenę. Patrz README.md.
 </div>
 
 <div class="tabs">
@@ -116,6 +123,25 @@
   <code>device_client.py</code>, wymaga dopisania obsługi konkretnego urządzenia (patrz README). Niedostępne z poziomu tego dashboardu.</span>
 </div>
 
+<div class="controls" style="border-radius:8px;">
+  <label>izolacja</label>
+  <select id="inInsulation">
+    <option value="xlpe">XLPE (90°C)</option>
+    <option value="epr">EPR (90°C)</option>
+    <option value="pvc">PVC (70°C)</option>
+  </select>
+  <label>przewodnik</label>
+  <select id="inMaterial">
+    <option value="copper">miedź</option>
+    <option value="aluminum">aluminium</option>
+  </select>
+  <label>temp. otoczenia (°C)</label>
+  <input type="number" id="inAmbientTemp" value="25" step="1">
+  <label>lata w eksploatacji</label>
+  <input type="number" id="inYearsInService" value="0" min="0" step="0.5">
+  <span class="empty-note" style="margin-left:6px;">parametry kabla dla szacunku żywotności (poniżej)</span>
+</div>
+
 <div class="note" id="dataNote">Wybierz scenariusz demo i kliknij "Analizuj".</div>
 
 <div class="cards" id="cardsBox"></div>
@@ -146,6 +172,17 @@
 <div class="panel">
   <h2>Log zdarzeń</h2>
   <div class="events-list" id="eventsBox">—</div>
+</div>
+
+<div class="grid2">
+  <div class="panel">
+    <h2>Prognoza (kolejny odczyt, model Holta)</h2>
+    <div class="kv-grid" id="forecastBox">—</div>
+  </div>
+  <div class="panel">
+    <h2>Żywotność linii/kabla (szacunek)</h2>
+    <div class="kv-grid" id="cableLifeBox">—</div>
+  </div>
 </div>
 
 <footer>TIMDR-Grid-Monitor · lokalne API (Flask, 127.0.0.1:8070) · wykresy Canvas 2D, bez CDN</footer>
@@ -315,6 +352,49 @@ function renderCharts(data){
   });
 }
 
+function renderForecast(data){
+  const box = document.getElementById('forecastBox');
+  const p = data.forecast.prediction, ev = data.forecast.events;
+  const rows = [
+    ['Napięcie →', fmt(p.voltage_next,1) + ' V'],
+    ['Częstotliwość →', fmt(p.frequency_next,2) + ' Hz'],
+    ['Obciążenie →', fmt(p.load_next,0) + ' W'],
+    ['THD →', fmt(p.harmonic_next,1) + ' %'],
+  ];
+  let html = rows.map(([l,v]) => `<div><div class="kv-label">${l}</div><div class="kv-value">${v}</div></div>`).join('');
+
+  const alerts = [];
+  if (ev.predicted_overload) alerts.push(`<div class="ev-row ev-overload">⚠ Prognozowane przeciążenie: ${fmt(ev.predicted_overload.load_next,0)}W > próg ${fmt(ev.predicted_overload.threshold,0)}W</div>`);
+  if (ev.predicted_micro_outage) alerts.push(`<div class="ev-row ev-outage">⚡ Prognozowany mikro-zanik: ${fmt(ev.predicted_micro_outage.voltage_next,0)}V < próg ${fmt(ev.predicted_micro_outage.threshold,0)}V</div>`);
+  if (ev.predicted_harmonic_spike) alerts.push(`<div class="ev-row ev-harmonic">〰 Prognozowany skok THD: ${fmt(ev.predicted_harmonic_spike.harmonic_next,1)}% (${ev.predicted_harmonic_spike.powod})</div>`);
+
+  box.innerHTML = html + (alerts.length ? `<div style="grid-column:1/-1;margin-top:8px;">${alerts.join('')}</div>` : '<div style="grid-column:1/-1;margin-top:8px;" class="empty-note">Brak prognozowanych zdarzeń.</div>');
+}
+
+function renderCableLife(data){
+  const box = document.getElementById('cableLifeBox');
+  const cl = data.cable_life;
+  const statusClass = cl.status === 'KRYTYCZNE' ? 'ev-overload' : (cl.status === 'PRZYSPIESZONE_STARZENIE' ? 'ev-harmonic' : '');
+  const rows = [
+    ['Status', `<span class="${statusClass}">${cl.status}</span>`],
+    ['Szacowana temp. przewodnika', fmt(cl.mean_conductor_temp_c,1) + ' °C'],
+    ['Współczynnik starzenia', fmt(cl.mean_aging_factor,2) + '×'],
+    ['Pozostała żywotność (szacunek)', fmt(cl.estimated_remaining_years,1) + ' lat'],
+    ['Projektowa żywotność', fmt(cl.design_life_years,0) + ' lat'],
+    ['Materiał / izolacja', `${cl.conductor_material === 'copper' ? 'miedź' : 'aluminium'} / ${cl.insulation_type.toUpperCase()}`],
+  ];
+  box.innerHTML = rows.map(([l,v]) => `<div><div class="kv-label">${l}</div><div class="kv-value">${v}</div></div>`).join('');
+}
+
+function cableParamsQuery(){
+  const p = new URLSearchParams();
+  p.set('insulation_type', document.getElementById('inInsulation').value);
+  p.set('conductor_material', document.getElementById('inMaterial').value);
+  p.set('ambient_temp_c', document.getElementById('inAmbientTemp').value);
+  p.set('years_in_service', document.getElementById('inYearsInService').value);
+  return p;
+}
+
 let lastData = null;
 function renderAll(data){
   lastData = data;
@@ -324,6 +404,8 @@ function renderAll(data){
   renderCards(data);
   renderEvents(data);
   renderCharts(data);
+  renderForecast(data);
+  renderCableLife(data);
 }
 
 async function loadScenarios(){
@@ -342,8 +424,10 @@ async function analyzeDemo(){
   showError('');
   const scenario = document.getElementById('inScenario').value;
   const ratedLoad = document.getElementById('inRatedLoad').value;
-  const url = `/api/demo?scenario=${encodeURIComponent(scenario)}&rated_load=${encodeURIComponent(ratedLoad)}`;
-  const res = await fetch(url);
+  const params = cableParamsQuery();
+  params.set('scenario', scenario);
+  params.set('rated_load', ratedLoad);
+  const res = await fetch(`/api/demo?${params.toString()}`);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
   renderAll(data);
@@ -357,6 +441,7 @@ async function analyzeCsv(){
   formData.append('file', fileInput.files[0]);
   formData.append('rated_load', document.getElementById('inRatedLoadCsv').value);
   formData.append('load_unit', document.getElementById('inLoadUnit').value);
+  for (const [k, v] of cableParamsQuery().entries()) formData.append(k, v);
   const res = await fetch('/api/csv', { method: 'POST', body: formData });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
