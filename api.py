@@ -15,8 +15,17 @@ Endpointy:
   GET  /                  -> dashboard
   GET  /api/health
   GET  /api/scenarios     -> lista dostępnych scenariuszy demo
-  GET  /api/demo          -> analiza scenariusza syntetycznego (?scenario=...&rated_load=...)
-  POST /api/csv           -> analiza wgranego pliku CSV/Excel (multipart/form-data)
+  GET  /api/demo          -> analiza scenariusza syntetycznego (?scenario=...&rated_load=...&<cable_params>)
+  POST /api/csv           -> analiza wgranego pliku CSV/Excel (multipart/form-data, + <cable_params>)
+
+Oba endpointy analizy (`/api/demo`, `/api/csv`) dodatkowo zwracają:
+  - `forecast` - prognoza kolejnego odczytu per kanał (model Holta, patrz
+    forecast_core.py) + interpretacja przewidywanych zdarzeń.
+  - `cable_life` - szacowana żywotność kabla/linii pod danym profilem
+    obciążenia (patrz cable_life.py). Parametry kabla (opcjonalne, z
+    sensownymi domyślnymi): `insulation_type` (pvc/xlpe/epr),
+    `conductor_material` (copper/aluminum), `ambient_temp_c`,
+    `years_in_service`, `thermal_halving_deltaT_c`.
 """
 
 from __future__ import annotations
@@ -30,6 +39,18 @@ from flask import Flask, jsonify, request, send_from_directory
 from grid_monitor import TimdrEnergySignals, TimdrEnergyEvents, TimdrEnergyMonitor
 from demo_generator import generate as generate_demo, SCENARIOS, SAMPLE_RATE_HZ, DEFAULT_RATED_LOAD_W, V_NOMINAL, F_NOMINAL
 from csv_loader import load_csv, CsvLoaderError
+from forecast_core import TimdrEnergyPredictor, TimdrEnergyForecastEvents, TimdrEnergyForecaster
+from cable_life import CableSpec, estimate_remaining_life
+
+# Parametry CableSpec, które wolno nadpisać z żądania HTTP (nazwa -> typ konwersji)
+_CABLE_PARAM_TYPES = {
+    "insulation_type": str,
+    "conductor_material": str,
+    "ambient_temp_c": float,
+    "years_in_service": float,
+    "thermal_halving_deltaT_c": float,
+    "design_life_years": float,
+}
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 
@@ -39,7 +60,12 @@ DISCLAIMER = (
     "jakości energii ani nie jest urządzeniem pomiarowym zgodnym z normą "
     "IEC 61000-4-30. Progi oparte o typowe wartości EN 50160 - przed użyciem "
     "produkcyjnym dostosuj do parametrów własnej instalacji (moc znamionowa, "
-    "lokalne wymagania)."
+    "lokalne wymagania). Prognoza (`forecast`) to prosta ekstrapolacja "
+    "statystyczna (model Holta), nie sieć AI wytrenowana na realnych danych. "
+    "Szacunek żywotności kabla (`cable_life`) to uproszczony model inżynierski "
+    "(grzanie I²R + reguła Montsingera/Arrheniusa dla starzenia izolacji) - "
+    "pokazuje TREND pod danym profilem obciążenia, nie certyfikowaną ocenę "
+    "wg IEC 60287/IEC 60216."
 )
 
 SCENARIO_LABELS = {
@@ -77,6 +103,30 @@ def _events_to_dict(events: TimdrEnergyEvents) -> dict:
         "harmonic_anomalies": [{"idx": i, "thd": v, "powod": p} for i, v, p in events.harmonic_anomalies],
         "frequency_anomalies": [{"idx": i, "freq": v, "poziom": p} for i, v, p in events.frequency_anomalies],
         "cyclic_disturbances": [{"channel": ch, "period_samples": p, "power": pw} for ch, p, pw in events.cyclic_disturbances],
+    }
+
+
+def _parse_cable_params(source) -> dict:
+    """Wyciąga opcjonalne parametry CableSpec z request.args/request.form.
+    Rzuca ValueError z czytelnym komunikatem przy niepoprawnej liczbie -
+    nigdy nie ignoruje cicho błędnego wejścia użytkownika."""
+    params = {}
+    for name, caster in _CABLE_PARAM_TYPES.items():
+        raw = source.get(name)
+        if raw is None or raw == "":
+            continue
+        try:
+            params[name] = caster(raw)
+        except ValueError:
+            raise ValueError(f"Parametr kabla '{name}' ma niepoprawną wartość: '{raw}'")
+    return params
+
+
+def _forecast_events_to_dict(events: TimdrEnergyForecastEvents) -> dict:
+    return {
+        "predicted_overload": events.predicted_overload,
+        "predicted_micro_outage": events.predicted_micro_outage,
+        "predicted_harmonic_spike": events.predicted_harmonic_spike,
     }
 
 
@@ -128,9 +178,18 @@ def _summary(events: TimdrEnergyEvents, n_samples: int, sample_rate_hz: float) -
     }
 
 
-def _run_analysis(signals: TimdrEnergySignals, sample_rate_hz: float, rated_load: float) -> dict:
+def _run_analysis(signals: TimdrEnergySignals, sample_rate_hz: float, rated_load: float, cable_params: dict | None = None) -> dict:
     monitor = TimdrEnergyMonitor(v_nominal=V_NOMINAL, f_nominal=F_NOMINAL, rated_load=rated_load)
     events = monitor.analyze(signals, sample_rate_hz)
+
+    predictor = TimdrEnergyPredictor()
+    prediction = predictor.predict_next(signals.voltage, signals.frequency, signals.load, signals.harmonics)
+    forecaster = TimdrEnergyForecaster(rated_load=rated_load, v_nominal=V_NOMINAL, f_nominal=F_NOMINAL)
+    forecast_events = forecaster.analyze_prediction(prediction, recent_harmonics=signals.harmonics)
+
+    spec = CableSpec(rated_load_w=rated_load, **(cable_params or {}))
+    cable_life = estimate_remaining_life(signals.load, sample_rate_hz, spec)
+
     result = {
         "sample_rate_hz": sample_rate_hz,
         "rated_load": rated_load,
@@ -139,6 +198,11 @@ def _run_analysis(signals: TimdrEnergySignals, sample_rate_hz: float, rated_load
         "signals": _signals_to_dict(signals),
         "events": _events_to_dict(events),
         "summary": _summary(events, len(signals.load), sample_rate_hz),
+        "forecast": {
+            "prediction": prediction,
+            "events": _forecast_events_to_dict(forecast_events),
+        },
+        "cable_life": cable_life,
         "disclaimer": DISCLAIMER,
     }
     return result
@@ -170,8 +234,16 @@ def demo():
     if scenario not in SCENARIOS:
         return jsonify({"error": f"Nieznany scenariusz '{scenario}'. Dostępne: {sorted(SCENARIOS)}"}), 400
 
+    try:
+        cable_params = _parse_cable_params(request.args)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
     signals = generate_demo(scenario)
-    result = _run_analysis(signals, SAMPLE_RATE_HZ, rated_load)
+    try:
+        result = _run_analysis(signals, SAMPLE_RATE_HZ, rated_load, cable_params)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     result["scenario"] = scenario
     return jsonify(_clean(result))
 
@@ -190,6 +262,11 @@ def csv_analyze():
         return jsonify({"error": "rated_load musi być liczbą"}), 400
     load_unit = request.form.get("load_unit", "W")
 
+    try:
+        cable_params = _parse_cable_params(request.form)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
     suffix = os.path.splitext(f.filename)[1] or ".csv"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         f.save(tmp.name)
@@ -205,7 +282,10 @@ def csv_analyze():
         except OSError as e:
             print(f"[api.py] UWAGA: nie udało się usunąć pliku tymczasowego '{tmp_path}': {e}")
 
-    result = _run_analysis(signals, sample_rate_hz, rated_load)
+    try:
+        result = _run_analysis(signals, sample_rate_hz, rated_load, cable_params)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     result["source_file"] = f.filename
     return jsonify(_clean(result))
 

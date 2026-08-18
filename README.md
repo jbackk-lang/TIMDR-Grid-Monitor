@@ -39,6 +39,12 @@ odpali serwer + otworzy dashboard w przeglądarce pod
    świadomie NIEzaimplementowane, patrz "Ograniczenia").
 4. **Dashboard** - 4 wykresy kanałów, selektor scenariusza demo, upload
    CSV/Excel, log zdarzeń, plakietka statusu OK/UWAGA/ALARM.
+5. **Prognoza next-step** (`forecast_core.py`) - przewidywana wartość
+   każdego kanału na kolejny krok + interpretacja zdarzeń prognozowanych
+   (przewidywane przeciążenie/mikro-zanik/skok THD).
+6. **Szacunek żywotności kabla/linii** (`cable_life.py`) - trend zużycia
+   izolacji pod danym profilem obciążenia, dla dowolnego kabla (miedź
+   lub aluminium, PVC/XLPE/EPR) - patrz "Model żywotności kabla" niżej.
 
 ## Detektory zdarzeń
 
@@ -61,6 +67,71 @@ odpali serwer + otworzy dashboard w przeglądarce pod
   na syntetyzowanej serii binarnej zdarzeń (harmoniczne+częstotliwość),
   żeby wykryć regularność samych *zdarzeń*, nawet gdy obciążenie jest
   płaskie.
+
+## Prognoza next-step
+
+`forecast_core.py` przewiduje kolejny odczyt (napięcie/częstotliwość/
+obciążenie/THD) na podstawie ostatniego okna historii i flaguje
+przewidywane zdarzenia (`predicted_overload`/`predicted_micro_outage`/
+`predicted_harmonic_spike`), analogicznie do detektorów w
+`grid_monitor.py`, ale na wartości prognozowanej zamiast zmierzonej.
+
+**Dlaczego NIE LSTM/PyTorch**, mimo że dostarczony szkic tak zakładał:
+w środowisku budowy tego repo instalacja `torch` zakończyła się błędem
+braku miejsca na dysku. Niezależnie od tej awarii - sieć z LOSOWO
+zainicjalizowanymi wagami (żaden wytrenowany plik wag nie został
+dostarczony) nie dałaby sensownej prognozy, tylko fikcyjne liczby
+wyglądające jak działający model AI. Zamiast tego domyślny model to
+**eksponencjalne wygładzanie z trendem (metoda Holta)** per kanał -
+zero dodatkowych zależności, w pełni przetestowany, przewidywalny.
+Kontrakt (`predict_next()` zwraca 4 wartości) jest niezależny od
+implementacji - realny wytrenowany model (LSTM czy inny) można podłączyć
+w przyszłości bez zmiany reszty modułu.
+
+**Dwa błędy znalezione w dostarczonym szkicu** (`TimdrEnergyForecaster.
+analyze_prediction`), oba tego samego rodzaju - porównanie prognozowanej
+wartości DO SAMEJ SIEBIE zamiast do progu:
+
+1. Przeciążenie: `load_next > overload_threshold * load_next` (x > 0.9x)
+   jest PRAWDĄ dla każdej dodatniej wartości - gwarantowany fałszywy
+   alarm na każdej pojedynczej prognozie, niezależnie od `rated_load`
+   (które w ogóle nie było parametrem klasy). Naprawione: porównanie do
+   `overload_threshold * rated_load`, `rated_load` wymagane w
+   konstruktorze (jawny błąd, gdy brak - ta sama zasada co w
+   `grid_monitor.TimdrEnergyMonitor`).
+2. Skok THD: `harmonic_next > harmonic_spike_factor * harmonic_next`
+   (x > 3x) jest prawdą TYLKO dla x < 0 - dla THD (zawsze ≥ 0) warunek
+   nigdy się nie uruchamiał, czyli detektor był martwym kodem. Naprawione
+   przez podwójny próg jak w `grid_monitor._detect_harmonic_anomalies` -
+   stały limit normy EN 50160 (8%) ORAZ opcjonalny próg adaptacyjny
+   (MAD-z) liczony z `recent_harmonics`, jeśli podane.
+
+Test mikro-zaników w szkicu był poprawny (`voltage_next < drop *
+v_nominal`) - nieporuszony.
+
+## Model żywotności kabla
+
+`cable_life.py` szacuje TREND zużycia żywotności izolacji kabla pod
+danym profilem obciążenia, dla dowolnego materiału przewodnika
+(miedź/aluminium) i typu izolacji (PVC/XLPE/EPR) - nie tylko dla
+miedzi. Oparty o dwie klasyczne zasady inżynierskie:
+
+1. **Grzanie I²R** - przyrost temperatury przewodnika ponad otoczenie
+   rośnie w przybliżeniu z kwadratem stosunku obciążenia do
+   znamionowego (`(load/rated_load)²`). Uproszczenie pokrewne (nie
+   identyczne) obwodowi cieplnemu z IEC 60287.
+2. **Reguła Montsingera/Arrheniusa** - żywotność izolacji polimerowej
+   skraca się o połowę na każde `thermal_halving_deltaT_c` (domyślnie
+   10°C) wzrostu temperatury ponad znamionową - ta sama logika co
+   "reguła sześciu stopni" IEEE C57.91 dla transformatorów olejowych.
+
+Domyślne stałe (temperatura znamionowa, projektowa żywotność) pochodzą
+z typowych wartości wg konwencji IEC 60502 dla PVC/XLPE/EPR - orientacyjne,
+nie zastępują karty katalogowej konkretnego kabla. **To NIE jest
+certyfikowana kalkulacja wg IEC 60287/IEC 60216** - model nie uwzględnia
+rzeczywistej rezystancji cieplnej otoczenia, wilgotności, liczby cykli
+termicznych (tylko średnią temperaturę) ani stanu mechanicznego kabla.
+Dla oceny realnej linii skonsultuj się z uprawnionym elektroenergetykiem.
 
 ## Uwagi techniczne (istotne przy dalszym rozwoju)
 
@@ -110,6 +181,8 @@ odpali serwer + otworzy dashboard w przeglądarce pod
 TIMDR-Grid-Monitor/
 ├── grid_core.py          - prymitywy TIMDR (anomalies/defect/rhythm/resonance)
 ├── grid_monitor.py        - TimdrEnergyMonitor (interpretacja domenowa, 4 detektory)
+├── forecast_core.py       - prognoza next-step (Holt) + interpretacja zdarzeń prognozowanych
+├── cable_life.py           - szacunek żywotności kabla (I²R + reguła Montsingera)
 ├── demo_generator.py      - 6 scenariuszy syntetycznych 230V/50Hz
 ├── csv_loader.py          - import CSV/Excel z walidacją schematu
 ├── device_client.py       - bufor + szkielet klientów Modbus/MQTT/REST
@@ -117,7 +190,7 @@ TIMDR-Grid-Monitor/
 ├── static/dashboard.html  - dashboard (ciemny motyw, Canvas 2D, bez CDN)
 ├── run.bat                - instalacja zależności + testy + start serwera
 ├── requirements.txt
-└── test_*.py               - 64 testy pytest
+└── test_*.py               - 106 testów pytest
 ```
 
 ## Endpointy API
@@ -125,8 +198,16 @@ TIMDR-Grid-Monitor/
 - `GET /` - dashboard
 - `GET /api/health`
 - `GET /api/scenarios` - lista dostępnych scenariuszy demo
-- `GET /api/demo?scenario=...&rated_load=...` - analiza scenariusza syntetycznego
-- `POST /api/csv` (multipart: `file`, `rated_load`, `load_unit`) - analiza wgranego pliku
+- `GET /api/demo?scenario=...&rated_load=...&<cable_params>` - analiza scenariusza syntetycznego
+- `POST /api/csv` (multipart: `file`, `rated_load`, `load_unit`, `<cable_params>`) - analiza wgranego pliku
+
+`<cable_params>` (opcjonalne, wpływają na `cable_life` w odpowiedzi):
+`insulation_type` (pvc/xlpe/epr), `conductor_material` (copper/aluminum),
+`ambient_temp_c`, `years_in_service`, `thermal_halving_deltaT_c`,
+`design_life_years`.
+
+Odpowiedź obu endpointów analizy zawiera, oprócz `signals`/`events`/
+`summary`: `forecast` (`prediction` + `events`) i `cable_life`.
 
 ## Testy
 
@@ -134,9 +215,10 @@ TIMDR-Grid-Monitor/
 python -m pytest -q
 ```
 
-64/64 testy przechodzą (`grid_core`, `grid_monitor` - w tym regresje
-wszystkich 4 błędów ze szkicu źródłowego, `demo_generator` pośrednio
-przez `grid_monitor`, `csv_loader`, `device_client`, `api`).
+106/106 testów przechodzi (`grid_core`, `grid_monitor` - w tym regresje
+wszystkich 4 błędów ze szkicu źródłowego, `forecast_core` - w tym
+regresje 2 błędów ze szkicu predyktora, `cable_life`, `demo_generator`
+pośrednio przez `grid_monitor`, `csv_loader`, `device_client`, `api`).
 
 ## Ograniczenia
 
@@ -157,3 +239,14 @@ przez `grid_monitor`, `csv_loader`, `device_client`, `api`).
 - Progi EN 50160 użyte tu (230V±10%, 50Hz±1%/±4%, THD≤8%) to typowe
   wartości normy dla sieci niskiego napięcia - realne umowy przyłączeniowe
   mogą mieć własne, bardziej rygorystyczne limity.
+- Prognoza (`forecast_core.py`) to statystyczna ekstrapolacja trendu
+  (metoda Holta) z ostatniego okna, NIE model AI wytrenowany na
+  realnych, historycznych awariach - dobra do sygnalizowania "kierunku"
+  najbliższego odczytu, nie do prognoz długoterminowych ani rzadkich
+  zdarzeń, których nie było w analizowanym oknie.
+- `cable_life.py` zakłada, że analizowane okno obciążenia reprezentuje
+  TYPOWY profil pracy kabla - ekstrapolacja `mean_aging_factor` na cały
+  pozostały okres życia jest tak dobra, jak reprezentatywność okna
+  (60s danych demo ≠ realny roczny profil obciążenia). Nie modeluje też
+  cykli termicznych ani stanu mechanicznego izolacji - tylko średnią
+  temperaturę.

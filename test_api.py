@@ -71,6 +71,58 @@ def test_demo_zwraca_sygnaly_i_dyscalimer(client):
     assert "disclaimer" in data and len(data["disclaimer"]) > 20
 
 
+def test_demo_zwraca_forecast_i_cable_life(client):
+    res = client.get("/api/demo?scenario=normalny&rated_load=10000")
+    data = res.get_json()
+    assert set(data["forecast"]["prediction"].keys()) == {
+        "voltage_next", "frequency_next", "load_next", "harmonic_next",
+    }
+    assert set(data["forecast"]["events"].keys()) == {
+        "predicted_overload", "predicted_micro_outage", "predicted_harmonic_spike",
+    }
+    cl = data["cable_life"]
+    assert cl["status"] in ("OK", "PRZYSPIESZONE_STARZENIE", "KRYTYCZNE")
+    assert cl["insulation_type"] == "xlpe"  # domyślne
+    assert cl["conductor_material"] == "copper"  # domyślne
+    assert "estimated_remaining_years" in cl
+
+
+def test_demo_cable_params_niestandardowe(client):
+    res = client.get(
+        "/api/demo?scenario=normalny&rated_load=10000"
+        "&insulation_type=pvc&conductor_material=aluminum&ambient_temp_c=30&years_in_service=10"
+    )
+    data = res.get_json()
+    cl = data["cable_life"]
+    assert cl["insulation_type"] == "pvc"
+    assert cl["conductor_material"] == "aluminum"
+    assert cl["ambient_temp_c"] == 30.0
+    assert cl["years_in_service"] == 10.0
+
+
+def test_demo_cable_param_niepoprawna_wartosc_400(client):
+    res = client.get("/api/demo?scenario=normalny&rated_load=10000&ambient_temp_c=cieplo")
+    assert res.status_code == 400
+    assert "ambient_temp_c" in res.get_json()["error"]
+
+
+def test_demo_cable_param_nieznana_izolacja_400(client):
+    res = client.get("/api/demo?scenario=normalny&rated_load=10000&insulation_type=guma")
+    assert res.status_code == 400
+
+
+def test_demo_przeciazenie_daje_prognozowany_alarm_przeciazenia(client):
+    """Scenariusz 'przeciazenie' utrzymuje load blisko/ponad progiem przez
+    dłuższy fragment okna - prognoza (ekstrapolacja trendu) na końcu also
+    powinna zwykle wskazywać na przeciążenie. Nie jest to gwarantowane dla
+    każdego przebiegu, ale sprawdzamy przynajmniej, że pole istnieje i ma
+    poprawny kształt (regresja strukturalna, nie samego faktu wykrycia)."""
+    res = client.get("/api/demo?scenario=przeciazenie&rated_load=10000")
+    data = res.get_json()
+    fc = data["forecast"]["events"]
+    assert fc["predicted_overload"] is None or "threshold" in fc["predicted_overload"]
+
+
 def test_demo_nieznany_scenariusz_400(client):
     res = client.get("/api/demo?scenario=nieistniejacy")
     assert res.status_code == 400

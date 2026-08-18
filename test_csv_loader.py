@@ -69,9 +69,24 @@ def test_load_csv_pusty_plik_daje_czytelny_blad(tmp_path):
 
 
 def test_load_csv_nienumeryczne_wartosci_dają_czytelny_blad(tmp_path):
+    # Wstrzykujemy nienumeryczną wartość bezpośrednio w surowym tekście
+    # CSV, a nie przez df.loc[i, "voltage"] = "USZKODZONE" - w nowszych
+    # wersjach pandas przypisanie stringa do kolumny float64 rzuca
+    # TypeError zamiast po cichu zmieniać dtype (dawne ostrzeżenie stało
+    # się błędem). Manipulacja tekstem jest niezależna od wersji pandas.
     df = _sample_df()
-    df.loc[5, "voltage"] = "USZKODZONE"
     path = _write_csv(tmp_path, df)
+    with open(path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    header = lines[0].strip().split(",")
+    voltage_idx = header.index("voltage")
+    data_line_idx = 6  # linia 0 = nagłówek, linia 6 = wiersz danych o indeksie 5
+    fields = lines[data_line_idx].strip().split(",")
+    fields[voltage_idx] = "USZKODZONE"
+    lines[data_line_idx] = ",".join(fields) + "\n"
+    with open(path, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
     with pytest.raises(CsvLoaderError, match="nienumerycznych"):
         load_csv(path)
 
