@@ -123,14 +123,32 @@ def estimate_conductor_temp(load_w, spec: CableSpec) -> np.ndarray:
     return spec.ambient_temp_c + rated_rise * load_ratio ** 2
 
 
+# Górna granica sensowności współczynnika starzenia. Bez tego capu
+# POJEDYNCZE próbki ekstremalnego przeciążenia (np. rated_load dobrane
+# niżej niż realny profil obciążenia) potrafią wywindować wynik do
+# absurdalnych, nieczytelnych wartości rzędu dziesiątek tysięcy - bo
+# 2^(ΔT/10) jest FUNKCJĄ WYKŁADNICZĄ temperatury, więc uśrednianie po
+# próbkach NIE spłaszcza ekstremów tak, jak zrobiłaby to średnia z
+# wielkości liniowej (np. samej temperatury - stąd też widoczny w UI
+# "paradoks": średnia temperatura może wyglądać umiarkowanie, a średni
+# współczynnik starzenia i tak eksploduje, bo dominują go nieliczne
+# gorące próbki). Powyżej ~1000x kabel w rzeczywistości dawno
+# przekroczyłby dopuszczalną temperaturę, zadziałałoby zabezpieczenie
+# (bezpiecznik/wyłącznik) albo izolacja uległaby fizycznemu zniszczeniu -
+# większa liczba nie niesie już użytecznej informacji, tylko szum.
+MAX_AGING_FACTOR = 1000.0
+
+
 def estimate_aging_factor(conductor_temp_c, spec: CableSpec) -> np.ndarray:
     """Względne tempo zużycia żywotności izolacji (reguła Montsingera):
     1.0 = tempo projektowe (praca dokładnie w temperaturze znamionowej),
     <1.0 = wolniejsze starzenie (chłodniej niż znamionowo),
-    >1.0 = szybsze starzenie (goręcej niż znamionowo)."""
+    >1.0 = szybsze starzenie (goręcej niż znamionowo). Ograniczone od
+    góry do MAX_AGING_FACTOR - patrz komentarz przy stałej."""
     conductor_temp_c = np.asarray(conductor_temp_c, dtype=float)
     delta = conductor_temp_c - spec.rated_conductor_temp_c
-    return 2.0 ** (delta / spec.thermal_halving_deltaT_c)
+    aging = 2.0 ** (delta / spec.thermal_halving_deltaT_c)
+    return np.clip(aging, 0.0, MAX_AGING_FACTOR)
 
 
 # Górna sensowna granica prognozy - powyżej tego model "wolniej niż

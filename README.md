@@ -133,6 +133,23 @@ rzeczywistej rezystancji cieplnej otoczenia, wilgotności, liczby cykli
 termicznych (tylko średnią temperaturę) ani stanu mechanicznego kabla.
 Dla oceny realnej linii skonsultuj się z uprawnionym elektroenergetykiem.
 
+**Błąd znaleziony i naprawiony: nieograniczony współczynnik starzenia
+przy niedopasowanym `rated_load`.** Współczynnik starzenia to
+`2^(ΔT/10)` - funkcja WYKŁADNICZA temperatury. Gdy profil obciążenia
+zawiera choćby kilka próbek dużo powyżej `rated_load` (np. użytkownik
+poda mniejszą moc znamionową niż realnie płynące waty w danych), model
+I²R ekstrapoluje fizycznie absurdalną temperaturę (setki °C), a
+uśrednienie funkcji wykładniczej po próbkach NIE spłaszcza takich
+ekstremów tak, jak zrobiłaby to średnia z wielkości liniowej - stąd w
+UI pozornie sprzeczny obraz: "średnia temperatura 81°C" obok
+"współczynnik starzenia 89633×". Naprawione przez `MAX_AGING_FACTOR =
+1000.0` (`cable_life.py`) - powyżej tej wartości kabel w rzeczywistości
+dawno przekroczyłby dopuszczalną temperaturę (zadziałałoby
+zabezpieczenie albo izolacja uległaby zniszczeniu), więc większa liczba
+nie niesie dodatkowej informacji. Status `KRYTYCZNE` i tak się
+utrzymuje dla chronicznego przeciążenia - zmienia się tylko czytelność
+wyświetlanej liczby, nie klasyfikacja.
+
 ## Uwagi techniczne (istotne przy dalszym rozwoju)
 
 - **Cztery błędy znalezione w dostarczonym szkicu kodu** (przed

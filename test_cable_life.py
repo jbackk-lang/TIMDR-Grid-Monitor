@@ -4,7 +4,7 @@ kabla na podstawie profilu obciążenia)."""
 import numpy as np
 import pytest
 
-from cable_life import CableSpec, estimate_conductor_temp, estimate_aging_factor, estimate_remaining_life
+from cable_life import CableSpec, estimate_conductor_temp, estimate_aging_factor, estimate_remaining_life, MAX_AGING_FACTOR
 
 
 # ---------------------------------------------------------------------
@@ -98,6 +98,16 @@ def test_aging_factor_podwojna_na_deltaT_powyzej():
     assert aging[0] == pytest.approx(2.0)
 
 
+def test_aging_factor_ograniczony_przy_ekstremalnej_temperaturze():
+    """Regresja: bez capu, 2^(delta/10) przy dużej delcie (np. skrajne
+    przeciążenie z niedopasowanym rated_load) daje wartości rzędu
+    dziesiątek/setek tysięcy - nieczytelne i bez dodatkowej informacji
+    (kabel dawno przekroczyłby dopuszczalną temperaturę w praktyce)."""
+    spec = CableSpec(rated_load_w=10_000.0, insulation_type="xlpe", thermal_halving_deltaT_c=10.0)
+    aging = estimate_aging_factor(np.array([90.0 + 300.0]), spec)  # +300°C ponad znamionową
+    assert aging[0] == pytest.approx(MAX_AGING_FACTOR)
+
+
 # ---------------------------------------------------------------------
 # estimate_remaining_life
 # ---------------------------------------------------------------------
@@ -150,3 +160,20 @@ def test_remaining_life_praca_dokladnie_znamionowa_konsumuje_projektowo():
     result = estimate_remaining_life(load, sample_rate_hz=100.0, spec=spec)
     assert result["mean_aging_factor"] == pytest.approx(1.0, abs=1e-6)
     assert result["estimated_remaining_years"] == pytest.approx(30.0, abs=0.1)
+
+
+def test_remaining_life_niedopasowany_rated_load_nie_daje_absurdalnego_wspolczynnika():
+    """Regresja na realny przypadek z dashboardu: rated_load dobrane
+    znacznie niżej niż faktyczny profil obciążenia (np. użytkownik
+    wpisał małą moc znamionową do scenariusza demo, który generuje
+    znacznie wyższe waty) - kilka próbek z ratio~2.6x potrafiło wcześniej
+    wywindować mean_aging_factor do dziesiątek tysięcy. Teraz ograniczone."""
+    rng = np.random.default_rng(3)
+    n = 2000
+    # profil głównie umiarkowany, ale z okresowymi skokami do ~2.6x znamionowej
+    load = np.full(n, 3000.0) + rng.normal(0, 100, n)
+    load[::50] = 11_766.0  # regularne skoki przeciążenia (co 50-tą próbkę)
+    spec = CableSpec(rated_load_w=4_500.0, insulation_type="pvc", years_in_service=10.0)
+    result = estimate_remaining_life(load, sample_rate_hz=100.0, spec=spec)
+    assert result["mean_aging_factor"] <= MAX_AGING_FACTOR
+    assert result["status"] == "KRYTYCZNE"  # to i tak realne, chroniczne przeciążenie
