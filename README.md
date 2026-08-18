@@ -4,6 +4,8 @@ Lokalne narzędzie badawczo-edukacyjne do monitoringu sieci energetycznej
 metodą TIMDR na czterech kanałach: napięcie, częstotliwość, harmoniczne
 (THD) i obciążenie. Wykrywa cztery typy zdarzeń: przeciążenia,
 mikro-zaniki napięcia, anomalie harmoniczne i cykliczne zakłócenia.
+Dodatkowo prognozuje kolejny odczyt i szacuje trend zużycia żywotności
+kabla/linii pod danym profilem obciążenia.
 
 > **Narzędzie badawczo-edukacyjne.** NIE zastępuje certyfikowanego
 > analizatora jakości energii ani nie jest urządzeniem pomiarowym
@@ -40,8 +42,9 @@ odpali serwer + otworzy dashboard w przeglądarce pod
 4. **Dashboard** - 4 wykresy kanałów, selektor scenariusza demo, upload
    CSV/Excel, log zdarzeń, plakietka statusu OK/UWAGA/ALARM.
 5. **Prognoza next-step** (`forecast_core.py`) - przewidywana wartość
-   każdego kanału na kolejny krok + interpretacja zdarzeń prognozowanych
-   (przewidywane przeciążenie/mikro-zanik/skok THD).
+   każdego kanału na kolejny krok (model Holta - wygładzanie z trendem,
+   patrz niżej) + interpretacja zdarzeń prognozowanych (przewidywane
+   przeciążenie/mikro-zanik/skok THD).
 6. **Szacunek żywotności kabla/linii** (`cable_life.py`) - trend zużycia
    izolacji pod danym profilem obciążenia, dla dowolnego kabla (miedź
    lub aluminium, PVC/XLPE/EPR) - patrz "Model żywotności kabla" niżej.
@@ -49,9 +52,8 @@ odpali serwer + otworzy dashboard w przeglądarce pod
 ## Detektory zdarzeń
 
 - **Przeciążenia** - `load > overload_threshold × rated_load`
-  (domyślnie 90%). Wymaga jawnego podania `rated_load` - **nigdy cichego
-  fallbacku** na inną heurystykę (patrz niżej, błąd 1 ze szkicu
-  źródłowego).
+  (domyślnie 90%). Wymaga jawnego podania `rated_load` - nigdy cichego
+  fallbacku na inną heurystykę.
 - **Mikro-zaniki** - napięcie spada poniżej `micro_outage_drop ×
   v_nominal` (domyślnie 50%) na co najmniej `micro_outage_min_ms`
   (domyślnie 10ms, zgodnie z konwencją odświeżania RMS co pół okresu
@@ -76,45 +78,20 @@ przewidywane zdarzenia (`predicted_overload`/`predicted_micro_outage`/
 `predicted_harmonic_spike`), analogicznie do detektorów w
 `grid_monitor.py`, ale na wartości prognozowanej zamiast zmierzonej.
 
-**Dlaczego NIE LSTM/PyTorch**, mimo że dostarczony szkic tak zakładał:
-w środowisku budowy tego repo instalacja `torch` zakończyła się błędem
-braku miejsca na dysku. Niezależnie od tej awarii - sieć z LOSOWO
-zainicjalizowanymi wagami (żaden wytrenowany plik wag nie został
-dostarczony) nie dałaby sensownej prognozy, tylko fikcyjne liczby
-wyglądające jak działający model AI. Zamiast tego domyślny model to
-**eksponencjalne wygładzanie z trendem (metoda Holta)** per kanał -
-zero dodatkowych zależności, w pełni przetestowany, przewidywalny.
-Kontrakt (`predict_next()` zwraca 4 wartości) jest niezależny od
-implementacji - realny wytrenowany model (LSTM czy inny) można podłączyć
-w przyszłości bez zmiany reszty modułu.
-
-**Dwa błędy znalezione w dostarczonym szkicu** (`TimdrEnergyForecaster.
-analyze_prediction`), oba tego samego rodzaju - porównanie prognozowanej
-wartości DO SAMEJ SIEBIE zamiast do progu:
-
-1. Przeciążenie: `load_next > overload_threshold * load_next` (x > 0.9x)
-   jest PRAWDĄ dla każdej dodatniej wartości - gwarantowany fałszywy
-   alarm na każdej pojedynczej prognozie, niezależnie od `rated_load`
-   (które w ogóle nie było parametrem klasy). Naprawione: porównanie do
-   `overload_threshold * rated_load`, `rated_load` wymagane w
-   konstruktorze (jawny błąd, gdy brak - ta sama zasada co w
-   `grid_monitor.TimdrEnergyMonitor`).
-2. Skok THD: `harmonic_next > harmonic_spike_factor * harmonic_next`
-   (x > 3x) jest prawdą TYLKO dla x < 0 - dla THD (zawsze ≥ 0) warunek
-   nigdy się nie uruchamiał, czyli detektor był martwym kodem. Naprawione
-   przez podwójny próg jak w `grid_monitor._detect_harmonic_anomalies` -
-   stały limit normy EN 50160 (8%) ORAZ opcjonalny próg adaptacyjny
-   (MAD-z) liczony z `recent_harmonics`, jeśli podane.
-
-Test mikro-zaników w szkicu był poprawny (`voltage_next < drop *
-v_nominal`) - nieporuszony.
+Model to **eksponencjalne wygładzanie z trendem (metoda Holta)** per
+kanał, nie sieć neuronowa - zero dodatkowych zależności, w pełni
+przetestowany, przewidywalny. Kontrakt (`predict_next()` zwraca 4
+wartości) jest niezależny od implementacji, więc realny wytrenowany
+model (LSTM czy inny, jeśli kiedyś pojawi się korpus rzeczywistych
+danych do treningu) można podłączyć w przyszłości bez zmiany reszty
+modułu - patrz "Ograniczenia".
 
 ## Model żywotności kabla
 
 `cable_life.py` szacuje TREND zużycia żywotności izolacji kabla pod
 danym profilem obciążenia, dla dowolnego materiału przewodnika
-(miedź/aluminium) i typu izolacji (PVC/XLPE/EPR) - nie tylko dla
-miedzi. Oparty o dwie klasyczne zasady inżynierskie:
+(miedź/aluminium) i typu izolacji (PVC/XLPE/EPR). Oparty o dwie
+klasyczne zasady inżynierskie:
 
 1. **Grzanie I²R** - przyrost temperatury przewodnika ponad otoczenie
    rośnie w przybliżeniu z kwadratem stosunku obciążenia do
@@ -126,71 +103,44 @@ miedzi. Oparty o dwie klasyczne zasady inżynierskie:
    "reguła sześciu stopni" IEEE C57.91 dla transformatorów olejowych.
 
 Domyślne stałe (temperatura znamionowa, projektowa żywotność) pochodzą
-z typowych wartości wg konwencji IEC 60502 dla PVC/XLPE/EPR - orientacyjne,
-nie zastępują karty katalogowej konkretnego kabla. **To NIE jest
-certyfikowana kalkulacja wg IEC 60287/IEC 60216** - model nie uwzględnia
-rzeczywistej rezystancji cieplnej otoczenia, wilgotności, liczby cykli
-termicznych (tylko średnią temperaturę) ani stanu mechanicznego kabla.
-Dla oceny realnej linii skonsultuj się z uprawnionym elektroenergetykiem.
+z typowych wartości wg konwencji IEC 60502 dla PVC/XLPE/EPR -
+orientacyjne, nie zastępują karty katalogowej konkretnego kabla. **To
+NIE jest certyfikowana kalkulacja wg IEC 60287/IEC 60216** - model nie
+uwzględnia rzeczywistej rezystancji cieplnej otoczenia, wilgotności,
+liczby cykli termicznych (tylko średnią temperaturę) ani stanu
+mechanicznego kabla. Dla oceny realnej linii skonsultuj się z
+uprawnionym elektroenergetykiem.
 
-**Błąd znaleziony i naprawiony: nieograniczony współczynnik starzenia
-przy niedopasowanym `rated_load`.** Współczynnik starzenia to
-`2^(ΔT/10)` - funkcja WYKŁADNICZA temperatury. Gdy profil obciążenia
-zawiera choćby kilka próbek dużo powyżej `rated_load` (np. użytkownik
-poda mniejszą moc znamionową niż realnie płynące waty w danych), model
-I²R ekstrapoluje fizycznie absurdalną temperaturę (setki °C), a
-uśrednienie funkcji wykładniczej po próbkach NIE spłaszcza takich
-ekstremów tak, jak zrobiłaby to średnia z wielkości liniowej - stąd w
-UI pozornie sprzeczny obraz: "średnia temperatura 81°C" obok
-"współczynnik starzenia 89633×". Naprawione przez `MAX_AGING_FACTOR =
-1000.0` (`cable_life.py`) - powyżej tej wartości kabel w rzeczywistości
-dawno przekroczyłby dopuszczalną temperaturę (zadziałałoby
-zabezpieczenie albo izolacja uległaby zniszczeniu), więc większa liczba
-nie niesie dodatkowej informacji. Status `KRYTYCZNE` i tak się
-utrzymuje dla chronicznego przeciążenia - zmienia się tylko czytelność
-wyświetlanej liczby, nie klasyfikacja.
+Współczynnik starzenia (`2^(ΔT/10)`, funkcja wykładnicza temperatury)
+jest ograniczony do `MAX_AGING_FACTOR = 1000` (`cable_life.py`) - bez
+tego capu pojedyncze próbki mocno powyżej `rated_load` potrafią
+wywindować wynik do nieczytelnych wartości rzędu dziesiątek tysięcy,
+bo uśrednianie funkcji wykładniczej nie spłaszcza ekstremów tak jak
+średnia z wielkości liniowej. Powyżej tej wartości kabel w
+rzeczywistości dawno przekroczyłby dopuszczalną temperaturę - większa
+liczba nie niesie dodatkowej informacji. Przy dostrajaniu progów
+pamiętaj o tej asymetrii między średnią temperaturą (liniowa) a
+średnim współczynnikiem starzenia (wykładniczy).
 
 ## Uwagi techniczne (istotne przy dalszym rozwoju)
 
-- **Cztery błędy znalezione w dostarczonym szkicu kodu** (przed
-  zbudowaniem tego repo szkic został zweryfikowany empirycznie, nie
-  zaufany bezpośrednio): (1) przeciążenia liczone względem `max()` z
-  bieżącego okna zamiast `rated_load` - flagowały ~21% zdrowego profilu
-  jako "przeciążenie"; naprawione przez wymaganie jawnego
-  `rated_load` i jawny błąd, gdy go brak. (2) częstotliwość w ogóle nie
-  była analizowana mimo istnienia w sygnaturze - dodany pełny detektor
-  z dwoma pasmami EN 50160. (3) próg THD wyłącznie adaptacyjny (3×
-  mediana) przeoczał realne przekroczenie normy 8% na sieci z
-  przewlekle podwyższonym tłem (mediana 6% → próg 18% > wstrzyknięte
-  9.5%) - naprawione przez podwójny próg (norma OR adaptacyjny).
-  (4) detekcja cykliczności na surowym niedetrendowanym sygnale fałszywie
-  łapała trend liniowy jako "okresowość" - naprawione przez detrend +
-  ścisłe lokalne maksima wewnętrzne.
-- **`rhythm()` (własna implementacja w `grid_core.py`)**: pierwsza wersja
-  powtórzyła dwa błędy znane z poprzednich projektów TIMDR w tym
-  zestawie - nieznormalizowana korelacja z granicznym lagiem trywialnie
-  wygrywającym lokalne maksimum, oraz fałszywa "okresowość" na gładkich
-  sygnałach (długi okres dobowy + szum daje płaskie wysokie
-  autokorelacje przy krótkich lagach, gdzie szum numeryczny tworzy
-  pozorne maksima lokalne). Naprawione przez port sprawdzonego algorytmu
-  ze `starszego` repo (znormalizowana korelacja per-lag, ścisłe
-  wewnętrzne maksima) plus nowy parametr `dip_frac` wymagający
-  faktycznego spadku autokorelacji poniżej progu przed akceptacją
-  kandydata na pik. Ograniczenie odziedziczone (nie regresja): pik
-  dokładnie na `max_lag` nigdy nie zostanie wykryty (brak prawego
-  sąsiada) - `cyclic_max_lag` w scenariuszach demo ma z tego powodu
-  margines nad oczekiwanym okresem.
 - **Status ALARM vs UWAGA** (`api.py`, `_summary()`): przeciążenia i
   mikro-zaniki zawsze dają ALARM. Anomalie THD/częstotliwości dają ALARM
   tylko gdy przekroczony jest twardy limit normy (`limit_normy`/
   `krytyczne`) - sama flaga adaptacyjna (MAD-z) daje UWAGA, nie ALARM,
   bo przy dużej liczbie próbek ma nieuniknioną statystyczną częstość
-  "fałszywych" trafień (np. ~12 na 6000 próbek scenariusza "typowa
-  praca" przy factor=3.0 - to oczekiwane zachowanie progu adaptacyjnego,
-  nie błąd). Przy dostrajaniu czułości pamiętaj o tym rozróżnieniu.
-- **Port 8070, celowo NIE 5060.** Ta sama pułapka co w innych projektach
-  tego zestawu - port 5060 (i kilka innych: 5061, 6000, 6666-6669, 6697)
-  jest na liście "zakazanych portów" przeglądarek/`fetch()`.
+  "fałszywych" trafień. Przy dostrajaniu czułości pamiętaj o tym
+  rozróżnieniu.
+- **`rhythm()` (`grid_core.py`)**: znormalizowana autokorelacja per-lag
+  ze ścisłymi wewnętrznymi maksimami lokalnymi + parametr `dip_frac`
+  wymagający faktycznego spadku autokorelacji przed akceptacją
+  kandydata na pik (odróżnia realną cykliczność od gładkich sygnałów
+  z szumem). Ograniczenie: pik dokładnie na `max_lag` nigdy nie zostanie
+  wykryty (brak prawego sąsiada) - `cyclic_max_lag` w scenariuszach demo
+  ma z tego powodu margines nad oczekiwanym okresem.
+- **Port 8070, celowo NIE 5060.** Port 5060 (i kilka innych: 5061, 6000,
+  6666-6669, 6697) jest na liście "zakazanych portów" przeglądarek/
+  `fetch()`.
 
 ## Struktura plików
 
@@ -207,7 +157,7 @@ TIMDR-Grid-Monitor/
 ├── static/dashboard.html  - dashboard (ciemny motyw, Canvas 2D, bez CDN)
 ├── run.bat                - instalacja zależności + testy + start serwera
 ├── requirements.txt
-└── test_*.py               - 106 testów pytest
+└── test_*.py               - 108 testów pytest
 ```
 
 ## Endpointy API
@@ -232,10 +182,9 @@ Odpowiedź obu endpointów analizy zawiera, oprócz `signals`/`events`/
 python -m pytest -q
 ```
 
-106/106 testów przechodzi (`grid_core`, `grid_monitor` - w tym regresje
-wszystkich 4 błędów ze szkicu źródłowego, `forecast_core` - w tym
-regresje 2 błędów ze szkicu predyktora, `cable_life`, `demo_generator`
-pośrednio przez `grid_monitor`, `csv_loader`, `device_client`, `api`).
+108/108 testów przechodzi (`grid_core`, `grid_monitor`, `forecast_core`,
+`cable_life`, `demo_generator` pośrednio przez `grid_monitor`,
+`csv_loader`, `device_client`, `api`).
 
 ## Ograniczenia
 
@@ -257,13 +206,12 @@ pośrednio przez `grid_monitor`, `csv_loader`, `device_client`, `api`).
   wartości normy dla sieci niskiego napięcia - realne umowy przyłączeniowe
   mogą mieć własne, bardziej rygorystyczne limity.
 - Prognoza (`forecast_core.py`) to statystyczna ekstrapolacja trendu
-  (metoda Holta) z ostatniego okna, NIE model AI wytrenowany na
-  realnych, historycznych awariach - dobra do sygnalizowania "kierunku"
-  najbliższego odczytu, nie do prognoz długoterminowych ani rzadkich
-  zdarzeń, których nie było w analizowanym oknie.
+  z ostatniego okna, nie model wytrenowany na realnych, historycznych
+  awariach - dobra do sygnalizowania "kierunku" najbliższego odczytu,
+  nie do prognoz długoterminowych ani rzadkich zdarzeń, których nie było
+  w analizowanym oknie.
 - `cable_life.py` zakłada, że analizowane okno obciążenia reprezentuje
-  TYPOWY profil pracy kabla - ekstrapolacja `mean_aging_factor` na cały
-  pozostały okres życia jest tak dobra, jak reprezentatywność okna
-  (60s danych demo ≠ realny roczny profil obciążenia). Nie modeluje też
-  cykli termicznych ani stanu mechanicznego izolacji - tylko średnią
-  temperaturę.
+  TYPOWY profil pracy kabla - ekstrapolacja na cały pozostały okres
+  życia jest tak dobra, jak reprezentatywność okna (60s danych demo ≠
+  realny roczny profil obciążenia). Nie modeluje cykli termicznych ani
+  stanu mechanicznego izolacji - tylko średnią temperaturę.
