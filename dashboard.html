@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<title>TIMDR-Grid-Monitor — monitoring sieci energetycznej</title>
+<style>
+  :root{
+    --bg: #0e1420; --panel: #161e2d; --panel-border: #253248;
+    --text: #e6edf5; --muted: #8393ab;
+    --ok: #35d488; --warn: #f5a623; --crit: #ef4b5f; --accent: #4f9dff; --violet:#a78bfa;
+    --mono: "Consolas","SFMono-Regular",Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  body{ margin:0; background:var(--bg); color:var(--text); font-family:"Segoe UI",Arial,sans-serif; padding:20px 28px 40px; }
+  header{ display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; flex-wrap:wrap; gap:10px; }
+  header h1{ font-size:20px; margin:0; font-weight:600; }
+  header .sub{ color:var(--muted); font-size:12px; font-family:var(--mono); }
+  .status-pill{ padding:5px 14px; border-radius:20px; font-size:12px; font-weight:700; letter-spacing:.5px; text-transform:uppercase; }
+  .status-ok{ background:rgba(53,212,136,.15); color:var(--ok); border:1px solid var(--ok); }
+  .status-warn{ background:rgba(245,166,35,.15); color:var(--warn); border:1px solid var(--warn); }
+  .status-crit{ background:rgba(239,75,95,.15); color:var(--crit); border:1px solid var(--crit); }
+
+  .disclaimer{ background:rgba(239,75,95,.08); border:1px solid var(--crit); color:#ffb4c0; border-radius:8px; padding:10px 14px; font-size:12px; margin-bottom:16px; line-height:1.5; }
+  .disclaimer b{ color:#fff; }
+
+  .controls{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; background:var(--panel); border:1px solid var(--panel-border); border-radius:10px; padding:12px 16px; margin-bottom:14px; }
+  .controls label{ font-size:12px; color:var(--muted); margin-right:4px; }
+  .controls input[type=text], .controls input[type=number], .controls select{ background:#0c121d; border:1px solid var(--panel-border); color:var(--text); border-radius:6px; padding:6px 8px; font-size:12px; }
+  .controls input[type=number]{ width:110px; }
+  .controls button{ background:var(--accent); color:#04101f; border:none; border-radius:6px; padding:8px 16px; font-weight:700; font-size:12px; cursor:pointer; }
+  .controls button:hover{ filter:brightness(1.1); }
+  .controls button.secondary{ background:#232f45; color:var(--text); border:1px solid var(--panel-border); }
+  .controls .divider{ width:1px; align-self:stretch; background:var(--panel-border); margin:0 4px; }
+  #err{ color:var(--crit); font-size:12px; font-family:var(--mono); margin-left:auto; white-space:pre-wrap; max-width:420px; }
+  .note{ font-size:12px; color:var(--muted); margin:2px 0 16px 2px; font-style:italic; }
+  .tabs{ display:flex; gap:6px; margin-bottom:4px; }
+  .tab-btn{ background:#0c121d; border:1px solid var(--panel-border); color:var(--muted); border-radius:6px 6px 0 0; padding:6px 14px; font-size:12px; cursor:pointer; }
+  .tab-btn.active{ background:var(--panel); color:var(--text); border-bottom-color:var(--panel); }
+  .tab-panel{ display:none; }
+  .tab-panel.active{ display:flex; }
+
+  .cards{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; margin-bottom:18px; }
+  .card{ background:var(--panel); border:1px solid var(--panel-border); border-radius:10px; padding:16px 18px; }
+  .card .label{ font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.6px; }
+  .card .value{ font-size:22px; font-weight:700; margin-top:6px; font-family:var(--mono); }
+  .card .sub{ font-size:10px; color:var(--muted); margin-top:4px; }
+  .card.crit .value{ color:var(--crit); }
+  .card.warn .value{ color:var(--warn); }
+  .card.ok .value{ color:var(--ok); }
+
+  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px; }
+  @media (max-width: 900px){ .grid2{ grid-template-columns:1fr; } }
+
+  .panel{ background:var(--panel); border:1px solid var(--panel-border); border-radius:10px; padding:16px 18px; margin-bottom:14px; overflow:hidden; }
+  .panel h2{ font-size:13px; margin:0 0 10px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; font-weight:600; }
+  .legend{ font-size:10px; color:var(--muted); margin-bottom:6px; }
+  .legend span{ margin-right:12px; }
+  .legend .dot{ display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; }
+  canvas{ max-width:100%; width:100%; display:block; }
+  footer{ margin-top:20px; color:var(--muted); font-size:11px; font-family:var(--mono); }
+
+  .events-list{ font-size:12px; line-height:1.8; max-height:260px; overflow-y:auto; }
+  .events-list .ev-row{ padding:4px 0; border-bottom:1px solid var(--panel-border); }
+  .events-list .ev-row:last-child{ border-bottom:none; }
+  .ev-overload{ color:var(--crit); }
+  .ev-outage{ color:var(--violet); }
+  .ev-harmonic{ color:var(--warn); }
+  .ev-freq{ color:#ff9f4f; }
+  .ev-cyclic{ color:var(--accent); }
+  .empty-note{ color:var(--muted); font-style:italic; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>⚡ TIMDR-Grid-Monitor</h1>
+    <div class="sub">TIMDR na napięciu/częstotliwości/harmonicznych/obciążeniu — przeciążenia · mikro-zaniki · anomalie harmoniczne · cykliczne zakłócenia</div>
+  </div>
+  <div id="statusPill" class="status-pill status-ok">brak danych</div>
+</header>
+
+<div class="disclaimer">
+  <b>Zastrzeżenie:</b> narzędzie badawczo-edukacyjne. NIE zastępuje certyfikowanego analizatora jakości energii
+  ani nie jest urządzeniem pomiarowym zgodnym z IEC 61000-4-30. Progi oparte o typowe wartości EN 50160 -
+  przed użyciem produkcyjnym dostosuj do parametrów własnej instalacji.
+</div>
+
+<div class="tabs">
+  <button class="tab-btn active" data-tab="demo">🎲 Dane demo</button>
+  <button class="tab-btn" data-tab="csv">📄 Import CSV/Excel</button>
+  <button class="tab-btn" data-tab="device">🔌 Realne urządzenie</button>
+</div>
+
+<div class="controls tab-panel active" id="tabDemo" style="border-radius:0 8px 8px 8px;">
+  <label>scenariusz</label>
+  <select id="inScenario"></select>
+  <label>moc znamionowa (W)</label>
+  <input type="number" id="inRatedLoad" value="10000" min="1">
+  <button id="btnAnalyzeDemo">▶ Analizuj</button>
+  <span id="err"></span>
+</div>
+
+<div class="controls tab-panel" id="tabCsv" style="border-radius:0 8px 8px 8px;">
+  <label>plik CSV/Excel</label>
+  <input type="file" id="inCsvFile" accept=".csv,.xlsx,.xls">
+  <label>jednostka obciążenia</label>
+  <select id="inLoadUnit"><option value="W">W</option><option value="kW">kW</option></select>
+  <label>moc znamionowa (W)</label>
+  <input type="number" id="inRatedLoadCsv" value="10000" min="1">
+  <button id="btnAnalyzeCsv">▶ Analizuj plik</button>
+</div>
+
+<div class="controls tab-panel" id="tabDevice" style="border-radius:0 8px 8px 8px;">
+  <span class="empty-note">Podłączenie realnego licznika (Modbus/MQTT/REST) - szkielet interfejsu gotowy w
+  <code>device_client.py</code>, wymaga dopisania obsługi konkretnego urządzenia (patrz README). Niedostępne z poziomu tego dashboardu.</span>
+</div>
+
+<div class="note" id="dataNote">Wybierz scenariusz demo i kliknij "Analizuj".</div>
+
+<div class="cards" id="cardsBox"></div>
+
+<div class="grid2">
+  <div class="panel">
+    <h2>Napięcie [V]</h2>
+    <div class="legend"><span><i class="dot" style="background:#4f9dff"></i>napięcie</span><span><i class="dot" style="background:#a78bfa"></i>mikro-zaniki</span></div>
+    <canvas id="chartVoltage" height="180"></canvas>
+  </div>
+  <div class="panel">
+    <h2>Częstotliwość [Hz]</h2>
+    <div class="legend"><span><i class="dot" style="background:#35d488"></i>częstotliwość</span><span><i class="dot" style="background:#ff9f4f"></i>odchylenia</span></div>
+    <canvas id="chartFrequency" height="180"></canvas>
+  </div>
+  <div class="panel">
+    <h2>THD [%]</h2>
+    <div class="legend"><span><i class="dot" style="background:#f5a623"></i>THD</span><span><i class="dot" style="background:#ef4b5f"></i>przekroczenia normy/adaptacyjne</span></div>
+    <canvas id="chartHarmonics" height="180"></canvas>
+  </div>
+  <div class="panel">
+    <h2>Obciążenie [W]</h2>
+    <div class="legend"><span><i class="dot" style="background:#ef4b5f"></i>obciążenie</span><span><i class="dot" style="background:var(--muted)"></i>próg przeciążenia</span></div>
+    <canvas id="chartLoad" height="180"></canvas>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Log zdarzeń</h2>
+  <div class="events-list" id="eventsBox">—</div>
+</div>
+
+<footer>TIMDR-Grid-Monitor · lokalne API (Flask, 127.0.0.1:8070) · wykresy Canvas 2D, bez CDN</footer>
+
+<script>
+'use strict';
+const COLORS = { ok:'#35d488', warn:'#f5a623', crit:'#ef4b5f', accent:'#4f9dff', violet:'#a78bfa', orange:'#ff9f4f', muted:'#8393ab', grid:'#1c2536', axis:'#8393ab' };
+
+function showError(msg){
+  document.getElementById('err').textContent = msg;
+  if (msg) console.error('[dashboard]', msg);
+}
+function fmt(x, digits){
+  if (x === null || x === undefined || Number.isNaN(x)) return '—';
+  return Number(x).toFixed(digits === undefined ? 2 : digits);
+}
+
+function drawChart(canvas, opts){
+  if (!canvas) return;
+  const rect = canvas.parentElement ? canvas.parentElement.getBoundingClientRect() : null;
+  const parentWidth = rect && rect.width ? rect.width : (canvas.parentElement ? canvas.parentElement.clientWidth : 400);
+  const cssWidth = Math.max(200, Math.floor(parentWidth) || 400);
+  const cssHeight = opts.height || 180;
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.style.width = cssWidth + 'px';
+  canvas.style.height = cssHeight + 'px';
+  canvas.width = Math.round(cssWidth * dpr);
+  canvas.height = Math.round(cssHeight * dpr);
+
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+  const n = (opts.y || []).length;
+  const pad = { left: 52, right: 10, top: 8, bottom: 16 };
+  const plotW = Math.max(10, cssWidth - pad.left - pad.right);
+  const plotH = Math.max(10, cssHeight - pad.top - pad.bottom);
+
+  if (n === 0){
+    ctx.fillStyle = COLORS.muted; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('brak danych', cssWidth / 2, cssHeight / 2);
+    return;
+  }
+
+  const idxAt = i => pad.left + (n <= 1 ? plotW/2 : (i/(n-1))*plotW);
+
+  let allY = opts.y.filter(v => isFinite(v));
+  if (opts.refLine !== undefined && isFinite(opts.refLine)) allY = allY.concat([opts.refLine]);
+  let yMin = Math.min(...allY), yMax = Math.max(...allY);
+  if (yMin === yMax){ yMin -= 1; yMax += 1; }
+  const yPad = (yMax - yMin) * 0.1;
+  yMin -= yPad; yMax += yPad;
+  const yAt = v => pad.top + plotH - ((v - yMin) / (yMax - yMin)) * plotH;
+
+  ctx.strokeStyle = COLORS.grid; ctx.lineWidth = 1;
+  ctx.fillStyle = COLORS.axis; ctx.font = '9px monospace'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  for (let g = 0; g <= 4; g++){
+    const yy = pad.top + (g / 4) * plotH;
+    ctx.beginPath(); ctx.moveTo(pad.left, yy); ctx.lineTo(pad.left + plotW, yy); ctx.stroke();
+    const val = yMax - (g / 4) * (yMax - yMin);
+    ctx.fillText(fmt(val, Math.abs(val) < 10 ? 2 : (Math.abs(val)<1000?1:0)), pad.left - 4, yy);
+  }
+
+  if (opts.refLine !== undefined && isFinite(opts.refLine)){
+    ctx.strokeStyle = COLORS.muted; ctx.setLineDash([4,3]); ctx.lineWidth = 1;
+    const ry = yAt(opts.refLine);
+    ctx.beginPath(); ctx.moveTo(pad.left, ry); ctx.lineTo(pad.left+plotW, ry); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  ctx.strokeStyle = opts.color || COLORS.accent; ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  for (let i = 0; i < n; i++){
+    const xx = idxAt(i), yy = yAt(opts.y[i]);
+    if (i === 0) ctx.moveTo(xx, yy); else ctx.lineTo(xx, yy);
+  }
+  ctx.stroke();
+
+  (opts.markers || []).forEach(m => {
+    ctx.fillStyle = m.color || COLORS.crit;
+    (m.indices || []).forEach(i => {
+      if (i < 0 || i >= n) return;
+      const xx = idxAt(i), yy = yAt(opts.y[i]);
+      ctx.beginPath();
+      ctx.arc(xx, yy, m.radius || 2.5, 0, 2 * Math.PI);
+      ctx.fill();
+    });
+  });
+
+  ctx.fillStyle = COLORS.axis; ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.font = '9px monospace';
+  const xTicks = Math.min(6, n);
+  for (let k = 0; k < xTicks; k++){
+    const idx = Math.round(k * (n - 1) / Math.max(1, xTicks - 1));
+    ctx.fillText(String(idx), idxAt(idx), pad.top + plotH + 2);
+  }
+}
+
+function setStatus(summary){
+  const pill = document.getElementById('statusPill');
+  pill.classList.remove('status-ok', 'status-warn', 'status-crit');
+  if (summary.status === 'ALARM'){
+    pill.textContent = 'ALARM'; pill.classList.add('status-crit');
+  } else if (summary.status === 'UWAGA'){
+    pill.textContent = 'UWAGA'; pill.classList.add('status-warn');
+  } else {
+    pill.textContent = 'OK'; pill.classList.add('status-ok');
+  }
+}
+
+function renderCards(data){
+  const box = document.getElementById('cardsBox');
+  box.innerHTML = '';
+  const s = data.summary;
+  const cards = [
+    ['Status', s.status, `${s.n_total_events} zdarzeń krytycznych`, s.status === 'ALARM' ? 'crit' : (s.status === 'UWAGA' ? 'warn' : 'ok')],
+    ['Przeciążenia', s.n_overloads, `próg ${fmt(data.rated_load*0.9,0)}W`, s.n_overloads>0?'crit':'ok'],
+    ['Mikro-zaniki', s.n_micro_outages, '', s.n_micro_outages>0?'crit':'ok'],
+    ['Anomalie THD', s.n_harmonic_anomalies, `limit EN50160: 8%`, s.n_harmonic_anomalies>0?'warn':'ok'],
+    ['Odchylenia f', s.n_frequency_anomalies, `nominalna ${data.f_nominal}Hz`, s.n_frequency_anomalies>0?'warn':'ok'],
+    ['Cykliczne zakłócenia', s.n_cyclic_disturbances, '', s.n_cyclic_disturbances>0?'warn':'ok'],
+    ['Czas trwania', fmt(s.duration_s,1)+'s', `${s.n_samples} próbek @ ${fmt(data.sample_rate_hz,0)}Hz`, ''],
+  ];
+  cards.forEach(([label, value, sub, cls]) => {
+    const div = document.createElement('div');
+    div.className = 'card' + (cls ? ' '+cls : '');
+    div.innerHTML = `<div class="label">${label}</div><div class="value">${value}</div>` + (sub ? `<div class="sub">${sub}</div>` : '');
+    box.appendChild(div);
+  });
+}
+
+function renderEvents(data){
+  const box = document.getElementById('eventsBox');
+  const ev = data.events;
+  const lines = [];
+  ev.overloads.slice(0,20).forEach(e => lines.push(`<div class="ev-row ev-overload">⚠ Przeciążenie @ próbka ${e.idx}: ${fmt(e.load,0)}W (znamionowa: ${fmt(e.rated_load,0)}W)</div>`));
+  ev.micro_outages.slice(0,20).forEach(e => lines.push(`<div class="ev-row ev-outage">⚡ Mikro-zanik @ próbka ${e.start_idx}: ${fmt(e.duration_ms,1)}ms</div>`));
+  ev.harmonic_anomalies.slice(0,20).forEach(e => lines.push(`<div class="ev-row ev-harmonic">〰 Anomalia THD @ próbka ${e.idx}: ${fmt(e.thd,1)}% (${e.powod})</div>`));
+  ev.frequency_anomalies.slice(0,20).forEach(e => lines.push(`<div class="ev-row ev-freq">Δf Odchylenie częstotliwości @ próbka ${e.idx}: ${fmt(e.freq,2)}Hz (${e.poziom})</div>`));
+  ev.cyclic_disturbances.forEach(e => lines.push(`<div class="ev-row ev-cyclic">🔁 Cykliczne zakłócenie [${e.channel}]: okres ${e.period_samples} próbek, siła ${fmt(e.power,2)}</div>`));
+
+  if (lines.length === 0){
+    box.innerHTML = '<div class="empty-note">Brak zdarzeń w analizowanym oknie.</div>';
+  } else {
+    box.innerHTML = lines.join('');
+  }
+}
+
+function renderCharts(data){
+  const s = data.signals, ev = data.events;
+
+  drawChart(document.getElementById('chartVoltage'), {
+    y: s.voltage, color: COLORS.accent, refLine: data.v_nominal,
+    markers: [{ indices: ev.micro_outages.map(e=>e.start_idx), color: COLORS.violet, radius: 3 }],
+  });
+  drawChart(document.getElementById('chartFrequency'), {
+    y: s.frequency, color: COLORS.ok, refLine: data.f_nominal,
+    markers: [{ indices: ev.frequency_anomalies.map(e=>e.idx), color: COLORS.orange, radius: 3 }],
+  });
+  drawChart(document.getElementById('chartHarmonics'), {
+    y: s.harmonics, color: COLORS.warn, refLine: 8.0,
+    markers: [{ indices: ev.harmonic_anomalies.map(e=>e.idx), color: COLORS.crit, radius: 3 }],
+  });
+  drawChart(document.getElementById('chartLoad'), {
+    y: s.load, color: COLORS.crit, refLine: data.rated_load * 0.9,
+    markers: [{ indices: ev.overloads.map(e=>e.idx), color: COLORS.crit, radius: 2 }],
+  });
+}
+
+let lastData = null;
+function renderAll(data){
+  lastData = data;
+  document.getElementById('dataNote').textContent =
+    `${data.scenario ? 'Scenariusz: ' + data.scenario : (data.source_file || 'plik')} — ${data.summary.n_samples} próbek, ${fmt(data.summary.duration_s,1)}s @ ${fmt(data.sample_rate_hz,1)}Hz.`;
+  setStatus(data.summary);
+  renderCards(data);
+  renderEvents(data);
+  renderCharts(data);
+}
+
+async function loadScenarios(){
+  const res = await fetch('/api/scenarios');
+  const data = await res.json();
+  const sel = document.getElementById('inScenario');
+  sel.innerHTML = '';
+  data.scenarios.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s.id; opt.textContent = s.label;
+    sel.appendChild(opt);
+  });
+}
+
+async function analyzeDemo(){
+  showError('');
+  const scenario = document.getElementById('inScenario').value;
+  const ratedLoad = document.getElementById('inRatedLoad').value;
+  const url = `/api/demo?scenario=${encodeURIComponent(scenario)}&rated_load=${encodeURIComponent(ratedLoad)}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+  renderAll(data);
+}
+
+async function analyzeCsv(){
+  showError('');
+  const fileInput = document.getElementById('inCsvFile');
+  if (!fileInput.files.length) { showError('Wybierz plik'); return; }
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+  formData.append('rated_load', document.getElementById('inRatedLoadCsv').value);
+  formData.append('load_unit', document.getElementById('inLoadUnit').value);
+  const res = await fetch('/api/csv', { method: 'POST', body: formData });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+  renderAll(data);
+}
+
+document.getElementById('btnAnalyzeDemo').addEventListener('click', () => analyzeDemo().catch(e => showError(e.message)));
+document.getElementById('btnAnalyzeCsv').addEventListener('click', () => analyzeCsv().catch(e => showError(e.message)));
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab' + btn.dataset.tab.charAt(0).toUpperCase() + btn.dataset.tab.slice(1)).classList.add('active');
+  });
+});
+
+let resizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (lastData) renderCharts(lastData); }, 150);
+});
+
+loadScenarios().then(() => analyzeDemo()).catch(e => showError(e.message));
+</script>
+</body>
+</html>
