@@ -134,6 +134,23 @@ klasyczne zasady inżynierskie:
    rośnie w przybliżeniu z kwadratem stosunku obciążenia do
    znamionowego (`(load/rated_load)²`). Uproszczenie pokrewne (nie
    identyczne) obwodowi cieplnemu z IEC 60287.
+
+   **ZNALEZIONY I NAPRAWIONY BŁĄD:** pierwsza wersja liczyła przyrost
+   przy obciążeniu znamionowym jako `rated_conductor_temp_c -
+   ambient_temp_c`, czyli WZGLĘDEM TEGO SAMEGO `ambient_temp_c`, które
+   zaraz potem było z powrotem dodawane do wyniku. Przy obciążeniu
+   dokładnie znamionowym dawało to `temp = ambient + (rated - ambient) =
+   rated` - wynik był CAŁKOWICIE NIEZALEŻNY od podniesienia/obniżenia
+   temperatury otoczenia (dokładnie objaw, który zgłosił użytkownik: "nie
+   wpływa na wynik"). Przy przeciążeniu było jeszcze gorzej - podniesienie
+   ambient OBNIŻAŁO wynikową temperaturę przewodnika, fizycznie odwrotny
+   kierunek. Naprawiono: przyrost przy obciążeniu znamionowym liczony jest
+   teraz względem STAŁEJ `REFERENCE_AMBIENT_TEMP_C=25°C`, niezależnej od
+   aktualnie wpisanego `ambient_temp_c` - dzięki temu podniesienie
+   otoczenia o X stopni zawsze podnosi temperaturę przewodnika o dokładnie
+   X stopni, dla dowolnego poziomu obciążenia. Regresja:
+   `test_temp_rosnie_z_ambient_przy_dowolnym_obciazeniu` w
+   `test_cable_life.py`.
 2. **Reguła Montsingera/Arrheniusa** - żywotność izolacji polimerowej
    skraca się o połowę na każde `thermal_halving_deltaT_c` (domyślnie
    10°C) wzrostu temperatury ponad znamionową - ta sama logika co

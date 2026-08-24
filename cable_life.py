@@ -63,6 +63,15 @@ DEFAULT_DESIGN_LIFE_YEARS = {
 
 VALID_MATERIALS = ("copper", "aluminum")
 
+# Referencyjna temperatura otoczenia, dla ktorej definiowany jest przyrost
+# temperatury przy obciazeniu znamionowym (rated_conductor_temp_c). Musi
+# byc STALA, niezalezna od aktualnego `ambient_temp_c` w CableSpec -
+# patrz komentarz w estimate_conductor_temp() nizej po pelne wyjasnienie
+# bledu, ktory powstawal przy ich pomyleniu. 25 C to typowa referencyjna
+# temperatura otoczenia w kartach katalogowych kabli (pokrewna, choc nie
+# identyczna, referencyjnym warunkom z IEC 60287).
+REFERENCE_AMBIENT_TEMP_C = 25.0
+
 
 @dataclass
 class CableSpec:
@@ -116,10 +125,29 @@ class CableSpec:
 def estimate_conductor_temp(load_w, spec: CableSpec) -> np.ndarray:
     """Szacowana temperatura przewodnika [°C] - I²R: przyrost ponad
     otoczenie skaluje się z kwadratem stosunku obciążenia do
-    znamionowego."""
+    znamionowego.
+
+    ZNALEZIONY I NAPRAWIONY BŁĄD: pierwsza wersja liczyła
+    `rated_rise = spec.rated_conductor_temp_c - spec.ambient_temp_c`, czyli
+    przyrost temperatury WZGLĘDEM TEGO SAMEGO `ambient_temp_c`, które
+    zaraz potem było z powrotem dodawane. Przy obciążeniu dokładnie
+    znamionowym (load_ratio=1) dawało to zawsze
+    `temp = ambient + (rated - ambient) = rated` - czyli wynik był
+    STAŁY i CAŁKOWICIE NIEZALEŻNY od `ambient_temp_c`, niezależnie od
+    tego, jak gorące/zimne otoczenie użytkownik wpisał. Przy przeciążeniu
+    (load_ratio>1) było jeszcze gorzej: podniesienie ambient_temp_c
+    OBNIŻAŁO wynikową temperaturę przewodnika - fizycznie odwrotny
+    kierunek. Naprawa: przyrost temperatury przy obciążeniu znamionowym
+    liczony jest teraz względem STAŁEJ referencyjnej temperatury otoczenia
+    (`REFERENCE_AMBIENT_TEMP_C`, niezależnej od `spec.ambient_temp_c`) -
+    dzięki temu podniesienie faktycznej temperatury otoczenia zawsze
+    podnosi wynikową temperaturę przewodnika 1:1 (fizycznie poprawnie dla
+    stałego źródła ciepła I²R nad zmiennym otoczeniem), niezależnie od
+    poziomu obciążenia. Regresja: `test_temp_rosnie_z_ambient_przy_dowolnym_obciazeniu`
+    w test_cable_life.py."""
     load_w = np.asarray(load_w, dtype=float)
     load_ratio = load_w / spec.rated_load_w
-    rated_rise = spec.rated_conductor_temp_c - spec.ambient_temp_c
+    rated_rise = spec.rated_conductor_temp_c - REFERENCE_AMBIENT_TEMP_C
     return spec.ambient_temp_c + rated_rise * load_ratio ** 2
 
 
