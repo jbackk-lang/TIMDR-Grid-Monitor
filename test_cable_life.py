@@ -109,25 +109,43 @@ def test_aging_factor_1_w_temperaturze_znamionowej():
     assert aging[0] == pytest.approx(1.0)
 
 
-def test_aging_factor_polowa_na_deltaT_ponizej():
-    spec = CableSpec(rated_load_w=10_000.0, insulation_type="xlpe", thermal_halving_deltaT_c=10.0)
-    aging = estimate_aging_factor(np.array([80.0]), spec)  # 90-10
-    assert aging[0] == pytest.approx(0.5)
-
-
 def test_aging_factor_podwojna_na_deltaT_powyzej():
+    """Punkt kalibracji: rownanie Arrheniusa jest wyprowadzone tak, zeby
+    DOKLADNIE w tym punkcie (rated + thermal_halving_deltaT_c) dawac
+    aging=2.0 - ten sam punkt odniesienia co dawna regula Montsingera."""
     spec = CableSpec(rated_load_w=10_000.0, insulation_type="xlpe", thermal_halving_deltaT_c=10.0)
     aging = estimate_aging_factor(np.array([100.0]), spec)  # 90+10
     assert aging[0] == pytest.approx(2.0)
 
 
-def test_aging_factor_ograniczony_przy_ekstremalnej_temperaturze():
-    """Regresja: bez capu, 2^(delta/10) przy dużej delcie (np. skrajne
-    przeciążenie z niedopasowanym rated_load) daje wartości rzędu
-    dziesiątek/setek tysięcy - nieczytelne i bez dodatkowej informacji
-    (kabel dawno przekroczyłby dopuszczalną temperaturę w praktyce)."""
+def test_aging_factor_arrhenius_asymetryczny_wzgledem_montsingera():
+    """Regresja na naprawiony błąd: pierwsza wersja (regula Montsingera,
+    2^(deltaT_celsjusz/10)) dawala SYMETRYCZNE podwojenie/polowienie
+    zywotnosci dla +deltaT/-deltaT (dokladnie 2.0 i dokladnie 0.5).
+    Prawdziwe rownanie Arrheniusa (liniowe w 1/T_bezwzgledne, nie w
+    ΔT_celsjusz) jest ASYMETRYCZNE: schlodzenie o ΔT daje WIEKSZY zysk
+    zywotnosci niz podgrzanie o ΔT ja kosztuje - wiec aging przy rated-10
+    NIE jest dokladnie 0.5, tylko nieco mniej (silniejszy zysk z
+    chlodzenia), mimo ze aging przy rated+10 pozostaje dokladnie 2.0 (tak
+    zdefiniowany punkt kalibracji)."""
     spec = CableSpec(rated_load_w=10_000.0, insulation_type="xlpe", thermal_halving_deltaT_c=10.0)
-    aging = estimate_aging_factor(np.array([90.0 + 300.0]), spec)  # +300°C ponad znamionową
+    aging_below = estimate_aging_factor(np.array([80.0]), spec)[0]  # 90-10
+    aging_above = estimate_aging_factor(np.array([100.0]), spec)[0]  # 90+10
+    assert aging_above == pytest.approx(2.0)
+    assert aging_below < 0.5  # asymetria: wiekszy zysk z chlodzenia
+    assert aging_below == pytest.approx(0.4807526920460988, rel=1e-6)
+    # sanity: odwrotnosc nie jest dokladnie symetryczna (1/2.0=0.5 != aging_below)
+    assert aging_below != pytest.approx(1.0 / aging_above)
+
+
+def test_aging_factor_ograniczony_przy_ekstremalnej_temperaturze():
+    """MAX_AGING_FACTOR to teraz czysto numeryczny sufit bezpieczenstwa
+    (przed przepelnieniem/nieczytelnymi liczbami), nie glowny mechanizm
+    ochronny - ten pelni teraz decomposition_temp_c (patrz
+    test_remaining_life_destrukcja_izolacji_*). Test: przy ASTRONOMICZNIE
+    duzej delcie (+1000°C) i tak trzeba gdzies uciac liczbe."""
+    spec = CableSpec(rated_load_w=10_000.0, insulation_type="xlpe", thermal_halving_deltaT_c=10.0)
+    aging = estimate_aging_factor(np.array([90.0 + 1000.0]), spec)
     assert aging[0] == pytest.approx(MAX_AGING_FACTOR)
 
 
@@ -190,7 +208,15 @@ def test_remaining_life_niedopasowany_rated_load_nie_daje_absurdalnego_wspolczyn
     znacznie niżej niż faktyczny profil obciążenia (np. użytkownik
     wpisał małą moc znamionową do scenariusza demo, który generuje
     znacznie wyższe waty) - kilka próbek z ratio~2.6x potrafiło wcześniej
-    wywindować mean_aging_factor do dziesiątek tysięcy. Teraz ograniczone."""
+    wywindować mean_aging_factor do dziesiątek tysięcy.
+
+    Z fizycznym sufitem (decomposition_temp_c) status jest teraz JESZCZE
+    trafniejszy niż wcześniej: regularne skoki do ~2.6x znamionowej na
+    izolacji PVC (rated=70°C, rozkład ~160°C) dają chwilowe temperatury
+    grubo powyżej progu rozkładu - w rzeczywistości takie powtarzające
+    się skoki NAPRAWDĘ zniszczyłyby izolację PVC, więc status
+    ZNISZCZENIE_IZOLACJI (nie tylko "KRYTYCZNE") jest poprawną,
+    ostrzejszą odpowiedzią, nie regresją."""
     rng = np.random.default_rng(3)
     n = 2000
     # profil głównie umiarkowany, ale z okresowymi skokami do ~2.6x znamionowej
@@ -199,4 +225,42 @@ def test_remaining_life_niedopasowany_rated_load_nie_daje_absurdalnego_wspolczyn
     spec = CableSpec(rated_load_w=4_500.0, insulation_type="pvc", years_in_service=10.0)
     result = estimate_remaining_life(load, sample_rate_hz=100.0, spec=spec)
     assert result["mean_aging_factor"] <= MAX_AGING_FACTOR
-    assert result["status"] == "KRYTYCZNE"  # to i tak realne, chroniczne przeciążenie
+    assert result["status"] == "ZNISZCZENIE_IZOLACJI"
+    assert result["estimated_remaining_years"] == 0.0
+    assert result["frac_samples_over_decomposition_temp"] > 0.0
+
+
+# ---------------------------------------------------------------------
+# decomposition_temp_c: fizyczny (nie numeryczny) sufit modelu
+# ---------------------------------------------------------------------
+
+def test_remaining_life_destrukcja_izolacji_gdy_chocby_jedna_probka_przekracza_rozklad():
+    """Nawet POJEDYNCZY, krotki skok powyzej temperatury rozkladu
+    izolacji wystarczy, zeby oznaczyc status jako zniszczenie - nie trzeba
+    sredniej ponad prog (analogia: graniczne temperatury zwarciowe wg
+    IEC 60949, ktorych nie wolno przekroczyc nawet chwilowo)."""
+    n = 500
+    load = np.full(n, 1000.0)  # spokojne, dalekie od znamionowego
+    load[250] = 50_000.0  # JEDEN skrajny, chwilowy skok
+    spec = CableSpec(rated_load_w=10_000.0, insulation_type="xlpe", years_in_service=0.0)
+    result = estimate_remaining_life(load, sample_rate_hz=100.0, spec=spec)
+    assert result["status"] == "ZNISZCZENIE_IZOLACJI"
+    assert result["estimated_remaining_years"] == 0.0
+    assert result["frac_samples_over_decomposition_temp"] == pytest.approx(1.0 / n)
+
+
+def test_remaining_life_bez_przekroczenia_rozkladu_normalny_status():
+    """Kontrola: profil, ktory NIE przekracza temperatury rozkladu, nie
+    powinien byc oznaczony jako zniszczenie, nawet przy podwyzszonym
+    ambient."""
+    n = 500
+    load = np.full(n, 10_000.0)  # dokladnie znamionowe
+    spec = CableSpec(rated_load_w=10_000.0, insulation_type="xlpe", ambient_temp_c=40.0)
+    result = estimate_remaining_life(load, sample_rate_hz=100.0, spec=spec)
+    assert result["status"] != "ZNISZCZENIE_IZOLACJI"
+    assert result["frac_samples_over_decomposition_temp"] == 0.0
+
+
+def test_spec_odrzuca_decomposition_ponizej_rated():
+    with pytest.raises(ValueError, match="decomposition_temp_c"):
+        CableSpec(rated_load_w=10_000.0, insulation_type="xlpe", decomposition_temp_c=50.0)

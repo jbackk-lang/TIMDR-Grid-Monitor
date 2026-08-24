@@ -151,10 +151,50 @@ klasyczne zasady inżynierskie:
    X stopni, dla dowolnego poziomu obciążenia. Regresja:
    `test_temp_rosnie_z_ambient_przy_dowolnym_obciazeniu` w
    `test_cable_life.py`.
-2. **Reguła Montsingera/Arrheniusa** - żywotność izolacji polimerowej
-   skraca się o połowę na każde `thermal_halving_deltaT_c` (domyślnie
-   10°C) wzrostu temperatury ponad znamionową - ta sama logika co
-   "reguła sześciu stopni" IEEE C57.91 dla transformatorów olejowych.
+2. **Równanie Arrheniusa (IEC 60216)** - żywotność izolacji polimerowej
+   maleje wykładniczo względem ODWROTNOŚCI temperatury bezwzględnej
+   (Kelwiny), skalibrowane tak, że skraca się o połowę na każde
+   `thermal_halving_deltaT_c` (domyślnie 10°C) wzrostu temperatury ponad
+   znamionową - ten sam punkt odniesienia co popularna "reguła
+   Montsingera" (analogicznie do "reguły sześciu stopni" IEEE C57.91 dla
+   transformatorów olejowych).
+
+   **ZNALEZIONY I NAPRAWIONY BŁĄD:** pierwsza wersja liczyła
+   `2^(ΔT_celsjusz / 10)` - funkcję wykładniczą LINIOWĄ w Celsjuszach
+   (reguła Montsingera), czyli lokalną aproksymację, ważną tylko blisko
+   punktu kalibracji. Dwie konsekwencje: (a) dawała SYMETRYCZNE
+   podwojenie/połowienie dla +ΔT/-ΔT, podczas gdy prawdziwa fizyka
+   (liniowa w 1/T_Kelvin, nie w ΔT_Celsjusz) jest ASYMETRYCZNA -
+   schłodzenie o ΔT daje WIĘKSZY zysk żywotności niż podgrzanie o ΔT ją
+   kosztuje; (b) przy dużym przegrzaniu rosła bez ograniczeń, co
+   wymuszało sztuczny, nisko ustawiony numeryczny sufit
+   (`MAX_AGING_FACTOR=1000`) - przez co wynik PRZESTAWAŁ SIĘ ZMIENIAĆ przy
+   dalszym wzroście temperatury, dokładnie ten objaw, który zgłosił
+   użytkownik przy testowaniu skrajnego przeciążenia. Naprawiono: pełne
+   równanie Arrheniusa `aging(T) = exp[B·(1/T_rated - 1/T)]`, T w
+   Kelwinach, stała B wyprowadzona (nie zgadnięta) z tego samego punktu
+   kalibracji (`thermal_halving_deltaT_c`) - ekstrapolacja poza ten punkt
+   jest teraz fizycznie poprawna i nie potrzebuje niskiego sufitu.
+   `MAX_AGING_FACTOR` pozostaje, ale podniesiony do `1e6` i jest już
+   TYLKO numerycznym zabezpieczeniem przed przepełnieniem, nie głównym
+   mechanizmem ochronnym - patrz punkt 3 niżej. Regresja:
+   `test_aging_factor_arrhenius_asymetryczny_wzgledem_montsingera` w
+   `test_cable_life.py`.
+3. **Temperatura rozkładu izolacji jako fizyczny (nie numeryczny) sufit.**
+   Powyżej `decomposition_temp_c` (orientacyjne wartości literaturowe:
+   PVC ~160°C, XLPE/EPR ~350°C - `DECOMPOSITION_TEMP_BY_INSULATION_C` w
+   `cable_life.py`, sprawdź kartę katalogową dla realnej wartości)
+   materiał ulega termicznemu rozkładowi NIEZALEŻNIE OD TEGO, jak długo
+   tam przebywał - analogia do granicznych temperatur zwarciowych z IEC
+   60949, których nie wolno przekroczyć nawet chwilowo. Jeśli
+   KTÓRAKOLWIEK próbka w oknie przekracza ten próg, status to
+   `ZNISZCZENIE_IZOLACJI` i `estimated_remaining_years=0` - i wynik
+   SŁUSZNIE przestaje się różnicować przy dalszym wzroście temperatury
+   (zniszczony materiał to zniszczony materiał), w odróżnieniu od
+   poprzedniego, czysto numerycznego sufitu, który dawał ten sam objaw
+   bez fizycznego uzasadnienia. Wynik zawiera też
+   `frac_samples_over_decomposition_temp` (jaki ułamek okna przekroczył
+   próg) do diagnostyki.
 
 Domyślne stałe (temperatura znamionowa, projektowa żywotność) pochodzą
 z typowych wartości wg konwencji IEC 60502 dla PVC/XLPE/EPR -
@@ -165,16 +205,17 @@ liczby cykli termicznych (tylko średnią temperaturę) ani stanu
 mechanicznego kabla. Dla oceny realnej linii skonsultuj się z
 uprawnionym elektroenergetykiem.
 
-Współczynnik starzenia (`2^(ΔT/10)`, funkcja wykładnicza temperatury)
-jest ograniczony do `MAX_AGING_FACTOR = 1000` (`cable_life.py`) - bez
-tego capu pojedyncze próbki mocno powyżej `rated_load` potrafią
-wywindować wynik do nieczytelnych wartości rzędu dziesiątek tysięcy,
-bo uśrednianie funkcji wykładniczej nie spłaszcza ekstremów tak jak
-średnia z wielkości liniowej. Powyżej tej wartości kabel w
-rzeczywistości dawno przekroczyłby dopuszczalną temperaturę - większa
-liczba nie niesie dodatkowej informacji. Przy dostrajaniu progów
-pamiętaj o tej asymetrii między średnią temperaturą (liniowa) a
-średnim współczynnikiem starzenia (wykładniczy).
+Współczynnik starzenia to funkcja wykładnicza temperatury, więc
+uśrednianie po próbkach NIE spłaszcza ekstremów tak jak zrobiłaby to
+średnia z wielkości liniowej - stąd widoczny w UI "paradoks": średnia
+temperatura przewodnika może wyglądać umiarkowanie, a średni
+współczynnik starzenia i tak jest bardzo wysoki, bo dominują go nieliczne
+gorące próbki (patrz `test_remaining_life_niedopasowany_rated_load_...`
+w `test_cable_life.py` - regularne 2% próbek przy ~2.6x znamionowej
+wystarcza, żeby oznaczyć całe okno jako `ZNISZCZENIE_IZOLACJI`, mimo że
+średnia temperatura w oknie to tylko ~51°C). Przy dostrajaniu progów
+pamiętaj o tej asymetrii między średnią temperaturą (liniowa) a średnim
+współczynnikiem starzenia (wykładniczy).
 
 ## Uwagi techniczne (istotne przy dalszym rozwoju)
 
@@ -212,7 +253,7 @@ TIMDR-Grid-Monitor/
 ├── static/dashboard.html  - dashboard (ciemny motyw, Canvas 2D, bez CDN)
 ├── run.bat                - instalacja zależności + testy + start serwera
 ├── requirements.txt
-└── test_*.py               - 114 testów pytest (w tym test_ringdown.py)
+└── test_*.py               - 118 testów pytest (w tym test_ringdown.py)
 ```
 
 ## Endpointy API
@@ -237,7 +278,7 @@ Odpowiedź obu endpointów analizy zawiera, oprócz `signals`/`events`/
 python -m pytest -q
 ```
 
-114/114 testów przechodzi (`grid_core`, `ringdown`, `grid_monitor`,
+118/118 testów przechodzi (`grid_core`, `ringdown`, `grid_monitor`,
 `forecast_core`, `cable_life`, `demo_generator` pośrednio przez
 `grid_monitor`, `csv_loader`, `device_client`, `api`).
 

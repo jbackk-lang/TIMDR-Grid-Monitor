@@ -81,7 +81,10 @@ def test_demo_zwraca_forecast_i_cable_life(client):
         "predicted_overload", "predicted_micro_outage", "predicted_harmonic_spike",
     }
     cl = data["cable_life"]
-    assert cl["status"] in ("OK", "PRZYSPIESZONE_STARZENIE", "KRYTYCZNE")
+    # ZNISZCZENIE_IZOLACJI wliczone - scenariusz demo "normalny" nie
+    # powinien go osiągać, ale asercja nie może zakładać, że nie istnieje
+    # (patrz cable_life.py::decomposition_temp_c).
+    assert cl["status"] in ("OK", "PRZYSPIESZONE_STARZENIE", "KRYTYCZNE", "ZNISZCZENIE_IZOLACJI")
     assert cl["insulation_type"] == "xlpe"  # domyślne
     assert cl["conductor_material"] == "copper"  # domyślne
     assert "estimated_remaining_years" in cl
