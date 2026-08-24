@@ -374,7 +374,12 @@ function renderForecast(data){
 function renderCableLife(data){
   const box = document.getElementById('cableLifeBox');
   const cl = data.cable_life;
-  const statusClass = cl.status === 'KRYTYCZNE' ? 'ev-overload' : (cl.status === 'PRZYSPIESZONE_STARZENIE' ? 'ev-harmonic' : '');
+  // ZNISZCZENIE_IZOLACJI (przekroczona fizyczna temperatura rozkładu -
+  // patrz cable_life.py::decomposition_temp_c) jest CO NAJMNIEJ tak
+  // poważne jak KRYTYCZNE, więc dzieli tę samą klasę koloru; bez tego
+  // wpisu status ten cicho spadał do domyślnego (niealarmowego) stylu.
+  const statusClass = (cl.status === 'KRYTYCZNE' || cl.status === 'ZNISZCZENIE_IZOLACJI') ? 'ev-overload'
+    : (cl.status === 'PRZYSPIESZONE_STARZENIE' ? 'ev-harmonic' : '');
   const rows = [
     ['Status', `<span class="${statusClass}">${cl.status}</span>`],
     ['Szacowana temp. przewodnika', fmt(cl.mean_conductor_temp_c,1) + ' °C'],
@@ -383,6 +388,10 @@ function renderCableLife(data){
     ['Projektowa żywotność', fmt(cl.design_life_years,0) + ' lat'],
     ['Materiał / izolacja', `${cl.conductor_material === 'copper' ? 'miedź' : 'aluminium'} / ${cl.insulation_type.toUpperCase()}`],
   ];
+  if (cl.frac_samples_over_decomposition_temp > 0) {
+    rows.push(['Próg rozkładu izolacji', fmt(cl.decomposition_temp_c,0) + ' °C']);
+    rows.push(['Udział próbek powyżej progu', fmt(100*cl.frac_samples_over_decomposition_temp,1) + '%']);
+  }
   box.innerHTML = rows.map(([l,v]) => `<div><div class="kv-label">${l}</div><div class="kv-value">${v}</div></div>`).join('');
 }
 
