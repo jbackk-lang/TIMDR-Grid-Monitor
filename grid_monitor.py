@@ -53,6 +53,7 @@ from __future__ import annotations
 import numpy as np
 
 from grid_core import anomalies, defect, rhythm, resonance
+from ringdown import ringdown_resonance
 
 
 class TimdrEnergySignals:
@@ -84,6 +85,11 @@ class TimdrEnergyEvents:
         self.harmonic_anomalies = []     # [(idx, thd_value, powod)] powod: "limit_normy" | "odchylenie_adaptacyjne" | "oba"
         self.frequency_anomalies = []    # [(idx, freq_value, poziom)] poziom: "normalne_odchylenie" | "krytyczne"
         self.cyclic_disturbances = []    # [(channel, period_samples, power)]
+        self.frequency_ringdown = []     # [dict] - patrz _detect_frequency_ringdown; REZONANS
+                                          # w sensie fizycznym (oscylacyjny powrót do f_nominal
+                                          # po zdarzeniu z frequency_anomalies), NIE to samo co
+                                          # `resonance()` w grid_core.py (licznik koincydencji
+                                          # między kanałami) - patrz ringdown.py.
 
 
 class TimdrEnergyMonitor:
@@ -135,6 +141,7 @@ class TimdrEnergyMonitor:
         self._detect_micro_outages(signals, events, sample_rate_hz)
         self._detect_harmonic_anomalies(signals, events)
         self._detect_frequency_anomalies(signals, events)
+        self._detect_frequency_ringdown(signals, events, sample_rate_hz)
         self._detect_cyclic_disturbances(signals, events)
         return events
 
@@ -231,6 +238,47 @@ class TimdrEnergyMonitor:
                 events.frequency_anomalies.append((int(i), float(freq[i]), "krytyczne"))
             elif deviation[i] > normal_band:
                 events.frequency_anomalies.append((int(i), float(freq[i]), "normalne_odchylenie"))
+
+    # -------------------------------------------------------------
+    # Rezonans częstotliwości - czy powrót do f_nominal PO zdarzeniu z
+    # _detect_frequency_anomalies jest oscylacyjny (patrz ringdown.py).
+    # baseline=f_nominal PODANE JAWNIE (nie liczone ze średniej okna przed
+    # zdarzeniem) - sieć energetyczna ma realny, znany z góry punkt
+    # odniesienia (50Hz), więc nie ma powodu zgadywać go z lokalnej
+    # historii, tak jak trzeba w domenach bez takiego stałego punktu
+    # (finanse, EKG).
+    # -------------------------------------------------------------
+
+    def _detect_frequency_ringdown(self, signals: TimdrEnergySignals, events: TimdrEnergyEvents,
+                                    sample_rate_hz: float):
+        freq = signals.frequency
+        n = len(freq)
+        if n == 0 or not events.frequency_anomalies:
+            return
+
+        t = np.arange(n, dtype=float) / sample_rate_hz
+
+        # Zgrupuj zaflagowane indeksy w CIĄGŁE bloki - liczymy ringdown od
+        # POCZĄTKU każdego bloku (odosobnione, sąsiadujące próbki tego
+        # samego zaburzenia nie powinny dawać wielu nakładających się
+        # analiz tego samego zdarzenia).
+        anomaly_idx = sorted({i for i, _, _ in events.frequency_anomalies})
+        blocks = [anomaly_idx[0]]
+        prev = anomaly_idx[0]
+        for i in anomaly_idx[1:]:
+            if i != prev + 1:
+                blocks.append(i)
+            prev = i
+
+        for event_idx in blocks:
+            if event_idx == 0:
+                continue  # brak historii przed zdarzeniem - nie da się oszacować szumu
+            res = ringdown_resonance(
+                t, freq, event_idx,
+                baseline=self.f_nominal,
+                pre_event_window=min(event_idx, 20),
+            )
+            events.frequency_ringdown.append({"event_idx": int(event_idx), **res})
 
     # -------------------------------------------------------------
     # Cykliczne zakłócenia

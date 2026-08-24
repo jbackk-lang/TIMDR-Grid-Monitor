@@ -31,7 +31,8 @@ odpali serwer + otworzy dashboard w przeglądarce pod
    z-score), `defect()` (skok między kolejnymi próbkami względem
    rozstępu różnic + bezwzględna podłoga), `rhythm()` (okresowość przez
    znormalizowaną autokorelację + ścisłe lokalne maksima), `resonance()`
-   (zgodność ≥2 kanałów jednocześnie).
+   (zgodność ≥2 kanałów jednocześnie - licznik koincydencji, NIE fizyczny
+   rezonans, patrz `ringdown.py` niżej).
 2. **Interpretacja domenowa** (`grid_monitor.py`, `TimdrEnergyMonitor`)
    - cztery detektory zdarzeń per kanał, patrz niżej.
 3. **Trzy źródła danych**: generator syntetyczny (`demo_generator.py`,
@@ -69,6 +70,42 @@ odpali serwer + otworzy dashboard w przeglądarce pod
   na syntetyzowanej serii binarnej zdarzeń (harmoniczne+częstotliwość),
   żeby wykryć regularność samych *zdarzeń*, nawet gdy obciążenie jest
   płaskie.
+
+## Rezonans częstotliwości (ringdown)
+
+`grid_core.py::resonance()` to licznik koincydencji (ile kanałów zgłasza
+anomalię jednocześnie) - nazwa pożyczona z fizyki, ale mechanizm inny.
+`ringdown.py::ringdown_resonance()` liczy coś, co faktycznie odpowiada
+fizycznemu rezonansowi: po zdarzeniu z `frequency_anomalies`
+(`_detect_frequency_ringdown` w `grid_monitor.py`) sprawdza, czy powrót
+częstotliwości do `f_nominal` (50Hz, podane JAWNIE, nie liczone ze
+średniej okna - sieć ma realny punkt odniesienia) jest OSCYLACYJNY (sieć
+"dzwoni" z powrotem do równowagi - dokładnie zjawisko znane w energetyce
+jako tłumienie oscylacji mocy/częstotliwości po zaburzeniu, inter-area
+oscillations) czy MONOTONICZNY (powrót bez dzwonienia - brak rezonansu).
+Wynik trafia do `TimdrEnergyEvents.frequency_ringdown` (lista dictów:
+`is_oscillatory`, `frequency_hz`, `damping_ratio`, `n_crossings`, itd.).
+
+Port 1:1 matematyki z `jbackk-lang/universal-state-analyzer`
+(`timdr_core/ringdown.py`) - tam pełna walidacja numeryczna na tłumionym
+oscylatorze o znanej częstotliwości/stałej czasowej (patrz tamto README).
+Metoda: histereza Schmitta NA WYKRYWANIU STANU (nie doklejona po fakcie do
+już policzonych szczytów - pierwsza próba tak zrobiona dawała regresję,
+patrz historia commitów tamtego repo) + interpolowane przejścia przez
+poziom odniesienia + logarithmic decrement, częstotliwość liczona z
+mediany (nie średniej) odstępów między przejściami.
+
+**Regresja specyficzna dla tego repo, znaleziona przy porcie**: przy
+realistycznej częstotliwości próbkowania sieci (fs=1000Hz) surowe
+zero-crossing dawało dziesiątki-setki fałszywych "przejść" z powodu
+drgania/chatter tuż przy prawdziwym przejściu przez zero (próbka szumu
+tuż przy zerze kilkukrotnie zmienia znak, zanim sygnał wyraźnie odjedzie
+na nową stronę) - dokładnie ten sam problem co w realnych komparatorach
+analogowych bez histerezy. Zapisane w `test_ringdown.py`
+(`test_underdamped_recovers_known_frequency_and_damping`, fs=1000Hz,
+f0=0.5Hz, τ=1.5s - typowe rzędy wielkości dla oscylacji mocy w sieci) oraz
+w `test_grid_monitor.py` (`test_frequency_ringdown_*`, integracja
+end-to-end przez `analyze()`).
 
 ## Prognoza next-step
 
@@ -147,7 +184,8 @@ pamiętaj o tej asymetrii między średnią temperaturą (liniowa) a
 ```
 TIMDR-Grid-Monitor/
 ├── grid_core.py          - prymitywy TIMDR (anomalies/defect/rhythm/resonance)
-├── grid_monitor.py        - TimdrEnergyMonitor (interpretacja domenowa, 4 detektory)
+├── ringdown.py            - ringdown_resonance(): rezonans w sensie fizycznym (oscylacyjny powrót do f_nominal)
+├── grid_monitor.py        - TimdrEnergyMonitor (interpretacja domenowa, 4 detektory + ringdown)
 ├── forecast_core.py       - prognoza next-step (Holt) + interpretacja zdarzeń prognozowanych
 ├── cable_life.py           - szacunek żywotności kabla (I²R + reguła Montsingera)
 ├── demo_generator.py      - 6 scenariuszy syntetycznych 230V/50Hz
@@ -157,7 +195,7 @@ TIMDR-Grid-Monitor/
 ├── static/dashboard.html  - dashboard (ciemny motyw, Canvas 2D, bez CDN)
 ├── run.bat                - instalacja zależności + testy + start serwera
 ├── requirements.txt
-└── test_*.py               - 108 testów pytest
+└── test_*.py               - 114 testów pytest (w tym test_ringdown.py)
 ```
 
 ## Endpointy API
@@ -182,9 +220,9 @@ Odpowiedź obu endpointów analizy zawiera, oprócz `signals`/`events`/
 python -m pytest -q
 ```
 
-108/108 testów przechodzi (`grid_core`, `grid_monitor`, `forecast_core`,
-`cable_life`, `demo_generator` pośrednio przez `grid_monitor`,
-`csv_loader`, `device_client`, `api`).
+114/114 testów przechodzi (`grid_core`, `ringdown`, `grid_monitor`,
+`forecast_core`, `cable_life`, `demo_generator` pośrednio przez
+`grid_monitor`, `csv_loader`, `device_client`, `api`).
 
 ## Ograniczenia
 
@@ -210,6 +248,14 @@ python -m pytest -q
   awariach - dobra do sygnalizowania "kierunku" najbliższego odczytu,
   nie do prognoz długoterminowych ani rzadkich zdarzeń, których nie było
   w analizowanym oknie.
+- `ringdown_resonance()` (`ringdown.py`) zwalidowany wyłącznie na
+  syntetycznym, czystym modelu tłumionego oscylatora (patrz
+  universal-state-analyzer) - `noise_floor_factor=3.0` jest wartością
+  ustaloną ręcznie, nieskalibrowaną na realnych danych sieciowych. Na
+  sygnale z nakładającymi się częstotliwościami (kilka trybów oscylacji
+  jednocześnie - realny scenariusz przy złożonych zakłóceniach
+  wieloźródłowych) metoda może dać mylącą, uśrednioną częstotliwość -
+  nietestowane.
 - `cable_life.py` zakłada, że analizowane okno obciążenia reprezentuje
   TYPOWY profil pracy kabla - ekstrapolacja na cały pozostały okres
   życia jest tak dobra, jak reprezentatywność okna (60s danych demo ≠

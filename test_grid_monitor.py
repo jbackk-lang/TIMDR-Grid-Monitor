@@ -160,6 +160,77 @@ def test_frequency_zdrowa_siec_bez_alarmow():
 
 
 # ---------------------------------------------------------------------
+# _detect_frequency_ringdown: rezonans w sensie fizycznym po zdarzeniu
+# częstotliwości (patrz ringdown.py) - integracja end-to-end przez analyze(),
+# nie tylko test jednostkowy samej ringdown_resonance() (ten jest w
+# test_ringdown.py). baseline=f_nominal PODANE JAWNIE, nie liczone z okna.
+# ---------------------------------------------------------------------
+
+def test_frequency_ringdown_wykrywa_oscylacyjny_powrot_po_zdarzeniu():
+    """Symuluje typowe 'kołysanie' częstotliwości sieci po zaburzeniu
+    (tłumiona oscylacja wokół f_nominal) - _detect_frequency_ringdown
+    powinien to złapać jako is_oscillatory=True z sensowną częstotliwością
+    kołysania."""
+    fs = 1000.0
+    n = 6000
+    rng = _rng()
+    freq = np.full(n, 50.0) + rng.normal(0, 0.02, n)
+
+    event_idx = 2000
+    post_len = n - event_idx
+    post_t = np.arange(post_len) / fs
+    f0, tau = 0.5, 1.5
+    freq[event_idx:] = 50.0 + 3.0 * np.exp(-post_t / tau) * np.cos(2 * np.pi * f0 * post_t)
+    freq[event_idx:] += rng.normal(0, 0.02, post_len)
+    # samo wychylenie musi też przekroczyć próg krytyczny, żeby
+    # _detect_frequency_anomalies w ogóle je zaflagował i uruchomił ringdown
+    assert abs(freq[event_idx] - 50.0) > 2.0  # 4% z 50Hz = 2.0Hz
+
+    sig = _base_signals(n, frequency=freq)
+    mon = TimdrEnergyMonitor(rated_load=10000.0)
+    ev = mon.analyze(sig, sample_rate_hz=fs)
+
+    assert len(ev.frequency_anomalies) > 0
+    assert len(ev.frequency_ringdown) >= 1
+    r = ev.frequency_ringdown[0]
+    assert r["baseline"] == 50.0  # f_nominal jawnie, nie średnia z okna
+    assert r["is_oscillatory"] is True
+    assert r["frequency_hz"] == pytest.approx(f0, rel=0.1)
+
+
+def test_frequency_ringdown_pusty_gdy_brak_anomalii_czestotliwosci():
+    rng = _rng()
+    n = 1000
+    freq = np.full(n, 50.0) + rng.normal(0, 0.02, n)
+    sig = _base_signals(n, frequency=freq)
+    mon = TimdrEnergyMonitor(rated_load=10000.0)
+    ev = mon.analyze(sig, sample_rate_hz=1000.0)
+    assert ev.frequency_ringdown == []
+
+
+def test_frequency_ringdown_monotoniczny_powrot_nie_jest_oscylacyjny():
+    """Skok częstotliwości bez 'kołysania' (monotoniczny powrót do 50Hz) -
+    zdarzenie jest zaflagowane, ale is_oscillatory ma być False."""
+    fs = 1000.0
+    n = 4000
+    rng = _rng()
+    freq = np.full(n, 50.0) + rng.normal(0, 0.02, n)
+
+    event_idx = 1500
+    post_len = n - event_idx
+    post_t = np.arange(post_len) / fs
+    freq[event_idx:] = 50.0 + 3.0 * np.exp(-post_t / 0.8)
+    freq[event_idx:] += rng.normal(0, 0.02, post_len)
+
+    sig = _base_signals(n, frequency=freq)
+    mon = TimdrEnergyMonitor(rated_load=10000.0)
+    ev = mon.analyze(sig, sample_rate_hz=fs)
+
+    assert len(ev.frequency_ringdown) >= 1
+    assert ev.frequency_ringdown[0]["is_oscillatory"] is False
+
+
+# ---------------------------------------------------------------------
 # Regresja bug 4: cykliczne zakłócenia - detrend + lokalne maksima
 # ---------------------------------------------------------------------
 
