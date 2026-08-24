@@ -76,6 +76,29 @@ def test_temp_polowa_obciazenia_znamionowego_daje_cwiartke_przyrostu():
     assert temp[0] == pytest.approx(expected)
 
 
+def test_temp_rosnie_z_ambient_przy_dowolnym_obciazeniu():
+    """Regresja na naprawiony błąd: pierwsza wersja liczyła
+    rated_rise = rated_conductor_temp_c - ambient_temp_c, czyli WZGLĘDEM
+    TEGO SAMEGO ambient_temp_c, które zaraz potem dodawała z powrotem.
+    Przy obciążeniu znamionowym (ratio=1) dawało to wynik CAŁKOWICIE
+    NIEZALEŻNY od ambient_temp_c (zawsze = rated_conductor_temp_c), a przy
+    przeciążeniu podniesienie ambient wręcz OBNIŻAŁO wynikową temperaturę
+    - fizycznie odwrotny kierunek. Teraz: podniesienie ambient o X stopni
+    musi podnieść wynikową temperaturę przewodnika o dokładnie X stopni,
+    niezależnie od poziomu obciążenia (stałe źródło ciepła I²R nad
+    zmiennym otoczeniem)."""
+    for load_w in (2_000.0, 10_000.0, 15_000.0):  # niedociążenie / znamionowe / przeciążenie
+        temps = []
+        for amb in (10.0, 25.0, 40.0, 60.0):
+            spec = CableSpec(rated_load_w=10_000.0, ambient_temp_c=amb, insulation_type="xlpe")
+            temps.append(estimate_conductor_temp(np.array([load_w]), spec)[0])
+        # monotonicznie rosnące wraz z ambient
+        assert all(b > a for a, b in zip(temps, temps[1:]))
+        # dokladnie 1:1 (staly rated_rise, wiec pochodna po ambient = 1)
+        diffs = np.diff(temps)
+        assert diffs == pytest.approx(np.diff([10.0, 25.0, 40.0, 60.0]))
+
+
 # ---------------------------------------------------------------------
 # estimate_aging_factor
 # ---------------------------------------------------------------------
