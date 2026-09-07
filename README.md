@@ -278,9 +278,13 @@ Odpowiedź obu endpointów analizy zawiera, oprócz `signals`/`events`/
 python -m pytest -q
 ```
 
-118/118 testów przechodzi (`grid_core`, `ringdown`, `grid_monitor`,
+120/120 testów przechodzi (`grid_core`, `ringdown`, `grid_monitor`,
 `forecast_core`, `cable_life`, `demo_generator` pośrednio przez
-`grid_monitor`, `csv_loader`, `device_client`, `api`).
+`grid_monitor`, `csv_loader`, `device_client`, `api`,
+`test_selfbaseline_recovery` — czy `anomalies()`/`defect()` wracają do
+normy po ustaniu anomalii sieciowej, ten sam test co w całej rodzinie
+repo TIMDR; tu bez błędu, w przeciwieństwie do
+`deliverable_timdr_finanse`, gdzie ten sam test znalazł realny bug).
 
 ## Ograniczenia
 
