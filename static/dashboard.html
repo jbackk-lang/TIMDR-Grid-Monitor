@@ -72,6 +72,17 @@
   .kv-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:10px 18px; font-size:12px; }
   .kv-grid .kv-label{ color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.5px; }
   .kv-grid .kv-value{ font-family:var(--mono); font-size:14px; margin-top:2px; }
+
+  .meta-row{ display:grid; grid-template-columns:110px 1fr; align-items:center; gap:10px; margin-bottom:10px; }
+  .meta-row:last-child{ margin-bottom:0; }
+  .meta-row .meta-label{ font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+  .phase-strip{ display:flex; height:22px; border-radius:4px; overflow:hidden; border:1px solid var(--panel-border); }
+  .phase-strip .seg{ flex:1; height:100%; }
+  .phase-stabilna{ background:var(--ok); }
+  .phase-przejsciowa{ background:var(--warn); }
+  .phase-krytyczna{ background:var(--crit); }
+  .meta-trigger{ grid-column:1/-1; font-size:11px; color:var(--muted); margin-top:-2px; }
+  .meta-trigger.hit{ color:var(--warn); }
 </style>
 </head>
 <body>
@@ -183,6 +194,17 @@
     <h2>Żywotność linii/kabla (szacunek)</h2>
     <div class="kv-grid" id="cableLifeBox">—</div>
   </div>
+</div>
+
+<div class="panel">
+  <h2>Meta-dynamika pola (Λ/τ/ρ/J, patrz meta_adapter.py)</h2>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--ok)"></i>stabilna</span>
+    <span><i class="dot" style="background:var(--warn)"></i>przejściowa</span>
+    <span><i class="dot" style="background:var(--crit)"></i>krytyczna</span>
+    <span style="margin-left:14px;">jeden segment = jedno okno (2.0s), pierwsze ~10s śladu bez wyniku (rozgrzewka progów historii)</span>
+  </div>
+  <div id="metaBox">—</div>
 </div>
 
 <footer>TIMDR-Grid-Monitor · lokalne API (Flask, 127.0.0.1:8070) · wykresy Canvas 2D, bez CDN</footer>
@@ -395,6 +417,31 @@ function renderCableLife(data){
   box.innerHTML = rows.map(([l,v]) => `<div><div class="kv-label">${l}</div><div class="kv-value">${v}</div></div>`).join('');
 }
 
+const CHANNEL_LABELS = { voltage: 'Napięcie', frequency: 'Częstotliwość', harmonics: 'THD', load: 'Obciążenie' };
+
+function renderMeta(data){
+  const box = document.getElementById('metaBox');
+  if (!data.meta){
+    box.innerHTML = `<div class="empty-note">Meta-dynamika niedostępna: ${data.meta_error || 'ślad za krótki (potrzeba min. ' + (data.meta_params ? fmt(data.meta_params.window_seconds + data.meta_params.rolling_history_seconds,0) : '?') + 's danych)'}.</div>`;
+    return;
+  }
+  const rows = Object.keys(CHANNEL_LABELS).map(ch => {
+    const m = data.meta[ch];
+    if (!m) return '';
+    const segs = m.phases.map(p => `<div class="seg phase-${p}" title="${p}"></div>`).join('');
+    const trig = m.trigger;
+    const trigHtml = trig && trig.triggered
+      ? `<div class="meta-trigger hit">⚑ ${trig.message}</div>`
+      : `<div class="meta-trigger">${trig ? trig.message : ''}</div>`;
+    return `<div class="meta-row">
+        <div class="meta-label">${CHANNEL_LABELS[ch]}</div>
+        <div class="phase-strip">${segs || '<span class="empty-note" style="padding-left:6px;">brak okien</span>'}</div>
+        ${trigHtml}
+      </div>`;
+  }).join('');
+  box.innerHTML = rows;
+}
+
 function cableParamsQuery(){
   const p = new URLSearchParams();
   p.set('insulation_type', document.getElementById('inInsulation').value);
@@ -415,6 +462,7 @@ function renderAll(data){
   renderCharts(data);
   renderForecast(data);
   renderCableLife(data);
+  renderMeta(data);
 }
 
 async function loadScenarios(){

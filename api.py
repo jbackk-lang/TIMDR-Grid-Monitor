@@ -26,6 +26,16 @@ Oba endpointy analizy (`/api/demo`, `/api/csv`) dodatkowo zwracają:
     sensownymi domyślnymi): `insulation_type` (pvc/xlpe/epr),
     `conductor_material` (copper/aluminum), `ambient_temp_c`,
     `years_in_service`, `thermal_halving_deltaT_c`.
+  - `meta` - fazy meta-dynamiki (stabilna/przejściowa/krytyczna) per kanał
+    z `meta_adapter.py` (patrz jego nagłówek - PROBA 1/PROBA 2, uczciwe
+    zastrzeżenia #1-#6, w tym słabą/niejednoznaczną detekcję przeciążenia
+    na kanale `load`). `null`, jeśli ślad jest za krótki na
+    WINDOW_SECONDS+ROLLING_HISTORY_SECONDS (patrz `too_short` w
+    odpowiedzi). UWAGA WYDAJNOŚCIOWA: liczenie meta-dynamiki jest
+    O(n_okien x historia) - na typowym 60-80s śladzie demo to realnie
+    kilkanaście-kilkadziesiąt sekund (zmierzone empirycznie przy budowie
+    meta_adapter.py), NIE jest to operacja czasu rzeczywistego. Dla bardzo
+    długich plików CSV to może dominować czas odpowiedzi endpointu.
 """
 
 from __future__ import annotations
@@ -41,6 +51,9 @@ from demo_generator import generate as generate_demo, SCENARIOS, SAMPLE_RATE_HZ,
 from csv_loader import load_csv, CsvLoaderError
 from forecast_core import TimdrEnergyPredictor, TimdrEnergyForecastEvents, TimdrEnergyForecaster
 from cable_life import CableSpec, estimate_remaining_life
+from meta_adapter import build_grid_meta_series, CHANNEL_NAMES, MetaOperatorM, WINDOW_SECONDS, ROLLING_HISTORY_SECONDS
+
+_meta_operator = MetaOperatorM()
 
 # Parametry CableSpec, które wolno nadpisać z żądania HTTP (nazwa -> typ konwersji)
 _CABLE_PARAM_TYPES = {
@@ -130,6 +143,24 @@ def _forecast_events_to_dict(events: TimdrEnergyForecastEvents) -> dict:
     }
 
 
+def _meta_to_dict(meta) -> dict:
+    """Serializuje GridMetaResult (jeden SeismicMetaResult per kanał) do
+    JSON. Zwraca per krok M: czas okna, faza, i magnitude(M) (suma |Λ|+|τ|+
+    |ρ|+|J|, ta sama wartość, którą MetaOperatorM.classify_phase() progami
+    0.1/1.0 zamienia na fazę - dołączona wprost, żeby front-end mógł
+    narysować ciągły wykres, nie tylko trzy dyskretne kolory)."""
+    out = {}
+    for name in CHANNEL_NAMES:
+        r = getattr(meta, name)
+        out[name] = {
+            "window_starts": list(r.window_starts),
+            "phases": list(r.phases),
+            "magnitude": [_meta_operator.magnitude(m) for m in r.M_series],
+            "trigger": r.trigger.as_dict(),
+        }
+    return out
+
+
 def _signals_to_dict(signals: TimdrEnergySignals) -> dict:
     return {
         "voltage": signals.voltage.tolist(),
@@ -190,6 +221,21 @@ def _run_analysis(signals: TimdrEnergySignals, sample_rate_hz: float, rated_load
     spec = CableSpec(rated_load_w=rated_load, **(cable_params or {}))
     cable_life = estimate_remaining_life(signals.load, sample_rate_hz, spec)
 
+    # meta-dynamika (Lambda/tau/rho/J, patrz meta_adapter.py) - opcjonalna:
+    # slad krotszy niz WINDOW_SECONDS+ROLLING_HISTORY_SECONDS podnosi
+    # ValueError w build_meta_series_from_waveform (za malo probek na
+    # choc jedno okno z pelna trailing historia) - to NIE jest blad calej
+    # analizy (events/forecast/cable_life dzialaja niezaleznie od dlugosci
+    # sladu), wiec tu jest zlapane osobno i zwrocone jako `meta: null` +
+    # `meta_error`, zamiast wywalac caly endpoint.
+    meta_result = None
+    meta_error = None
+    try:
+        meta_series = build_grid_meta_series(signals, sample_rate_hz=sample_rate_hz)
+        meta_result = _meta_to_dict(meta_series)
+    except ValueError as e:
+        meta_error = str(e)
+
     result = {
         "sample_rate_hz": sample_rate_hz,
         "rated_load": rated_load,
@@ -203,6 +249,12 @@ def _run_analysis(signals: TimdrEnergySignals, sample_rate_hz: float, rated_load
             "events": _forecast_events_to_dict(forecast_events),
         },
         "cable_life": cable_life,
+        "meta": meta_result,
+        "meta_error": meta_error,
+        "meta_params": {
+            "window_seconds": WINDOW_SECONDS,
+            "rolling_history_seconds": ROLLING_HISTORY_SECONDS,
+        },
         "disclaimer": DISCLAIMER,
     }
     return result
