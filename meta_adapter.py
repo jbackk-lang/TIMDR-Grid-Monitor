@@ -20,18 +20,24 @@ jak mainshock trzesienia ziemi w TIMDR-Earthquake-Core. Dlatego ten
 adapter uzywa TEJ SAMEJ, jednosladowej architektury co adapter sejsmiczny
 (kalibracja `rolling_history_seconds`), NIE architektury lozyskowej.
 
-REUZYCIE (nie duplikacja czwarty raz): `compute_global_thresholds()`/
+REUZYCIE (nie duplikacja czwarty raz), TERAZ PRZEZ WENDOROWANIE, NIE
+SIBLING-IMPORT (zmiana 2026-09-10): `compute_global_thresholds()`/
 `window_to_meta_state()`/`build_meta_series_from_waveform()` w
 TIMDR-Earthquake-Core/meta_adapter.py NIE sa w swojej logice specyficzne
 dla sejsmiki - dzialaja na dowolnej parze (t,s) i przyjmuja `core` jako
-parametr. Ten plik sibling-importuje je WPROST z TIMDR-Earthquake-Core
-zamiast przepisywac te sama matematyke okienkowania/progowania piaty raz
-w tym ekosystemie (pierwszy raz: analizator-gieldowy-v3, potem Synoptyk-v3,
-TIMDR-Earthquake-Core samo, TIMDR-Industrial-Predict przeniosl tylko
-flow()/trm() - TEN plik idzie o krok dalej i reuzywa CALA warstwe
-okienkowania, nie tylko flow/trm). Wynikowa klasa `SeismicMetaResult`
-(nazwa dziedziczona z importu) jest uzywana wprost, bez zmiany nazwy -
-ksztalt (window_starts/states/M_series/phases/trigger) jest identyczny
+parametr. Ten plik pierwotnie sibling-importowal je WPROST z
+TIMDR-Earthquake-Core; teraz uzywa lokalnej, zwendorowanej kopii
+(`_vendor_seismic_meta_windowing.py`, patrz jej naglowek) zamiast
+wymagac obecnosci innego repo jako folderu-siostry na dysku - powod:
+wyrazna prosba, zeby repozytoria kodu byly niezalezne od siebie. Kod
+pozostaje reuzyty (nie przepisany od zera piaty raz w tym ekosystemie:
+pierwszy raz analizator-gieldowy-v3, potem Synoptyk-v3, TIMDR-Earthquake-Core
+samo, TIMDR-Industrial-Predict przeniosl tylko flow()/trm() - TEN plik
+idzie o krok dalej i reuzywa CALA warstwe okienkowania, nie tylko flow/
+trm) - zmienil sie tylko MECHANIZM reuzycia (kopia zamiast sibling-importu
+w czasie wykonania), nie sama matematyka. Wynikowa klasa
+`SeismicMetaResult` jest uzywana wprost, bez zmiany nazwy - ksztalt
+(window_starts/states/M_series/phases/trigger) jest identyczny
 niezaleznie od domeny, przemianowanie byloby czysto kosmetyczne.
 
 ===========================================================================
@@ -165,72 +171,27 @@ UCZCIWE ZASTRZEZENIA:
 """
 from __future__ import annotations
 
-import os
-import sys
 from dataclasses import dataclass
 
 import numpy as np
 
 from grid_monitor import TimdrEnergySignals
 
+# ZWENDOROWANE 2026-09-10 (patrz nagłówki plików `_vendor_*.py` w tym
+# repo dla pełnego uzasadnienia): wcześniej ten moduł ładował
+# TIMDR-META-DYNAMICS i TIMDR-Earthquake-Core przez sys.path
+# sibling-import z folderów-sióstr na dysku. Zamienione na lokalne,
+# zwendorowane kopie, żeby to repo działało samodzielnie po sklonowaniu
+# WYŁĄCZNIE siebie (decyzja na wyraźną prośbę: "repozytoria kodu mają
+# być niezależne od siebie"). Zachowanie/matematyka bez zmian.
+from _vendor_timdr_meta_dynamics_core import MetaState, MetaOperatorM
+from _vendor_timdr_core_earthquake import TIMDR_EarthquakeCore
+from _vendor_seismic_meta_windowing import SeismicMetaResult, build_meta_series_from_waveform
+
 SAMPLE_RATE_HZ = 100.0
 WINDOW_SECONDS = 2.0
 ROLLING_HISTORY_SECONDS = 10.0
 K_NEIGHBORS = 3
-
-
-def _ensure_siblings_on_path() -> None:
-    """Dodaje foldery-siostry TIMDR-META-DYNAMICS i TIMDR-Earthquake-Core
-    do sys.path - ten sam wzorzec co
-    TIMDR-Industrial-Predict/bearing_meta_adapter.py (pierwszy adapter w
-    tym ekosystemie sibling-importujacy z DWOCH roznych repo naraz).
-    TIMDR-Earthquake-Core NIE jest importowane zwyklym `import
-    meta_adapter` - patrz `_load_earthquake_meta_adapter()` nizej po
-    powod (kolizja nazw modulow: to repo TEZ ma wlasny plik
-    `meta_adapter.py`)."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    for name in ("TIMDR-META-DYNAMICS", "TIMDR-Earthquake-Core"):
-        sibling = os.path.abspath(os.path.join(here, "..", name))
-        if not os.path.isdir(sibling):
-            raise ImportError(
-                f"meta_adapter wymaga folderu '{name}' jako siostry repo "
-                f"TIMDR-Grid-Monitor (szukano w: {sibling})."
-            )
-        if sibling not in sys.path:
-            sys.path.insert(0, sibling)
-
-
-def _load_earthquake_meta_adapter():
-    """Laduje TIMDR-Earthquake-Core/meta_adapter.py jako modul pod
-    WLASNA, jednoznaczna nazwa (`timdr_earthquake_meta_adapter`), importlib
-    z jawnej sciezki pliku - zwykle `import meta_adapter` rozwiazaloby sie
-    do TEGO PLIKU (ten sam plik nazwal siebie samego "meta_adapter" -
-    kolizja nazw modulow miedzy dwoma repo-siostrami), dajac circular
-    import zamiast prawdziwej zawartosci z Earthquake-Core. Ten sam
-    wzorzec importlib-z-jawnej-sciezki co
-    TIMDR-Math-Formalism/timdr_formalism/calibration.py::_load_weather_validation_module()."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    path = os.path.abspath(os.path.join(here, "..", "TIMDR-Earthquake-Core", "meta_adapter.py"))
-    if not os.path.isfile(path):
-        raise ImportError(f"Nie znaleziono {path}")
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("timdr_earthquake_meta_adapter", path)
-    if spec is None or spec.loader is None:  # pragma: no cover - defensywne
-        raise ImportError(f"Nie mozna zaladowac {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["timdr_earthquake_meta_adapter"] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-_ensure_siblings_on_path()
-
-from timdr_meta_dynamics import MetaState, MetaOperatorM  # noqa: E402
-from timdr_core_earthquake import TIMDR_EarthquakeCore  # noqa: E402
-
-_earthquake_meta_adapter = _load_earthquake_meta_adapter()
-SeismicMetaResult = _earthquake_meta_adapter.SeismicMetaResult
-build_meta_series_from_waveform = _earthquake_meta_adapter.build_meta_series_from_waveform
 
 CHANNEL_NAMES = ("voltage", "frequency", "harmonics", "load")
 
