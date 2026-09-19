@@ -51,32 +51,38 @@ if errorlevel 1 (
 )
 
 echo.
-echo Instalacja/aktualizacja zaleznosci...
-%PYCMD% -m pip install --quiet flask numpy pandas openpyxl pytest
-if errorlevel 1 (
-    echo BLAD: nie udalo sie zainstalowac zaleznosci pip.
-    echo Sprawdz polaczenie z internetem albo uruchom recznie:
-    echo   %PYCMD% -m pip install flask numpy pandas openpyxl pytest
-    pause
-    exit /b 1
-)
+echo Sprawdzam lokalne zaleznosci...
+%PYCMD% -c "import flask, numpy, pandas, openpyxl, pytest" >nul 2>&1
+if not errorlevel 1 goto :dependencies_ready
+
+echo Brakuje zaleznosci. Instaluje je jednorazowo...
+%PYCMD% -m pip install flask numpy pandas openpyxl pytest
+if errorlevel 1 goto :dependencies_failed
+goto :dependencies_ready
+
+:dependencies_failed
+echo BLAD: nie udalo sie zainstalowac zaleznosci pip.
+echo Sprawdz polaczenie z internetem albo uruchom recznie:
+echo   %PYCMD% -m pip install flask numpy pandas openpyxl pytest
+pause
+exit /b 1
+
+:dependencies_ready
 
 echo.
 echo Tryb natychmiastowy: pomijam testy przy starcie.
 echo Pelna walidacja jest dostepna po uruchomieniu z dashboardu
 echo lub recznie: run.bat --full-tests
-if /I "%~1"=="--full-tests" (
-    echo Uruchamiam pelny zestaw testow (moze potrwac kilka minut)...
-    rem --- Wlasny katalog tymczasowy omija zablokowany/uszkodzony Temp Windows ---
-    %PYCMD% -m pytest -q --basetemp=".pytest_tmp"
-    if errorlevel 1 (
-        echo.
-        echo UWAGA: co najmniej jeden test nie przeszedl. Serwer uruchomi
-        echo sie mimo to, ale sprawdz powyzsze wyniki testow.
-        echo.
-    )
-)
+if /I not "%~1"=="--full-tests" goto :start_server
+echo Uruchamiam pelny zestaw testow. To moze potrwac kilka minut.
+rem --- Wlasny katalog tymczasowy omija zablokowany/uszkodzony Temp Windows ---
+%PYCMD% -m pytest -q --basetemp=".pytest_tmp"
+if not errorlevel 1 goto :start_server
+echo.
+echo UWAGA: co najmniej jeden test nie przeszedl. Serwer uruchomi sie mimo to.
+echo.
 
+:start_server
 echo.
 echo Start serwera na http://127.0.0.1:8070
 echo (port 5060 i kilka innych celowo NIE sa uzywane - sa na liscie
@@ -90,12 +96,15 @@ call %PYCMD% api.py
 set "SERVER_EXIT=%ERRORLEVEL%"
 
 echo.
-if not "%SERVER_EXIT%"=="0" (
-    echo [BLAD] Serwer zakonczyl dzialanie z kodem %SERVER_EXIT%.
-    echo Tresc bledu znajduje sie powyzej.
-) else (
-    echo Serwer zostal zatrzymany.
-)
+if "%SERVER_EXIT%"=="0" goto :server_stopped
+echo [BLAD] Serwer zakonczyl dzialanie z kodem %SERVER_EXIT%.
+echo Tresc bledu znajduje sie powyzej.
+goto :after_server
+
+:server_stopped
+echo Serwer zostal zatrzymany.
+
+:after_server
 echo Nacisnij dowolny klawisz, aby zamknac to okno.
 pause >nul
 exit /b %SERVER_EXIT%
