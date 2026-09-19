@@ -84,6 +84,18 @@ echo  "zakazanych portow" przegladarek/fetch(), patrz README.md)
 echo (Ctrl+C aby zatrzymac)
 echo.
 start "" http://127.0.0.1:8070
-%PYCMD% api.py
+rem --- CALL zachowuje sterowanie w tym pliku nawet, gdy "python" na danym
+rem     komputerze jest skryptem .bat zamiast bezposrednim python.exe. ---
+call %PYCMD% api.py
+set "SERVER_EXIT=%ERRORLEVEL%"
 
-pause
+echo.
+if not "%SERVER_EXIT%"=="0" (
+    echo [BLAD] Serwer zakonczyl dzialanie z kodem %SERVER_EXIT%.
+    echo Tresc bledu znajduje sie powyzej.
+) else (
+    echo Serwer zostal zatrzymany.
+)
+echo Nacisnij dowolny klawisz, aby zamknac to okno.
+pause >nul
+exit /b %SERVER_EXIT%
