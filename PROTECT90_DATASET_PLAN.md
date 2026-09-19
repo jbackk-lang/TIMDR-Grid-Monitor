@@ -22,7 +22,8 @@ Druga komenda pobiera około 12 GB. Skrypt sprawdza opublikowane sumy MD5.
 ## Zamrożenie przed analizą
 
 1. Zapisać SHA-256 pobranego archiwum i CSV.
-2. Wybrać listę sample_id bez oglądania przebiegów oraz zapisać ją w repo.
+2. Uruchomić freeze_protect90.py. Wybiera on deterministycznie 128 epizodów
+   na każdą klasę zwarcia, wyłącznie z metadanych i przed odczytem przebiegów.
 3. Ustalić jedną lokalizację pomiarową i podział epizodowy.
 4. Utworzyć manifest FROZEN z listą oraz hashami.
 

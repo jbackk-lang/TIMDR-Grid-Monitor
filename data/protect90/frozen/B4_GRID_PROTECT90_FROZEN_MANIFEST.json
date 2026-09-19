@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "state": "FROZEN",
+  "dataset_id": "PROTECT-90 v1.0.0",
+  "doi": "10.5281/zenodo.21109169",
+  "source_type": "physically grounded EMT simulation; not field data",
+  "waveform_archive": {
+    "name": "hv_double_line_90kv_preprocessed_data.zip",
+    "md5": "7cf176f169299b825ba6a6be102edca8",
+    "sha256": "4ea9c23f7b9ca28a63e1d57b2a00686e811e0e02498dc0dbde4d57c78ab5bad5"
+  },
+  "labels_csv": {
+    "name": "hv_double_line_90kv_labels.csv",
+    "sha256": "c1f35ae428894fea893514986d0e55685b66e96bec2d15299f1c7ba3ec93a402"
+  },
+  "sampling_rate_hz": 6400,
+  "episode_duration_seconds": 1.0,
+  "analysis_observability": "one protection-relevant location, selected before waveform access",
+  "derived_grid_channels": {
+    "voltage": "mean three-phase 10 ms RMS",
+    "frequency": "phase-A zero-crossing estimate",
+    "harmonics": "one-cycle FFT ratio in percent",
+    "load": "apparent-power proxy sqrt(3)*Vrms*Irms"
+  },
+  "episode_selection_file": "B4_GRID_PROTECT90_FROZEN_EPISODE_IDS.json",
+  "episode_selection_sha256": "6b7a534ad34ae232150343d19e4e16a2f757cfc4a1c6c615936ed58262fd6da9",
+  "n_selected_episodes": 512,
+  "analysis_rule": "compare pre-event baseline with event-aligned windows; do not tune selection after results"
+}
