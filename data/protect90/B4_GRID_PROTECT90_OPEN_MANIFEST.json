@@ -1,0 +1,28 @@
+{
+  "schema_version": "1.0",
+  "state": "OPEN_FOR_ACQUISITION",
+  "dataset_id": "PROTECT-90 v1.0.0",
+  "doi": "10.5281/zenodo.21109169",
+  "license": "CC-BY-4.0",
+  "source_type": "physically grounded EMT simulation; not field data",
+  "meta_Q_source": "48 synchronized three-phase voltage/current waveform channels",
+  "time_source": "time_s in each episode DataFrame",
+  "geometry_time_mapping_source": "not applicable to this Grid waveform benchmark",
+  "raw_files": {
+    "labels_csv": {"name": "hv_double_line_90kv_labels.csv", "md5": "5f015330f77ed53b76bd5db26e83c48d", "sha256": "c1f35ae428894fea893514986d0e55685b66e96bec2d15299f1c7ba3ec93a402", "acquired": true},
+    "waveforms_zip": {"name": "hv_double_line_90kv_preprocessed_data.zip", "md5": "7cf176f169299b825ba6a6be102edca8"}
+  },
+  "sampling_interval_seconds": 0.00015625,
+  "sampling_rate_hz": 6400,
+  "episode_duration_seconds": 1.0,
+  "n_total_episodes": 9022,
+  "episode_selection": "Not frozen. Select before inspecting waveforms; record exact sample_id list and SHA-256 in a successor frozen manifest.",
+  "derived_grid_channels": {
+    "voltage": "mean three-phase 10 ms RMS",
+    "frequency": "zero-crossing estimate from phase-A voltage",
+    "harmonics": "one-cycle FFT ratio, percent",
+    "load": "apparent-power proxy sqrt(3)*Vrms*Irms"
+  },
+  "exclusion_log": [],
+  "freeze_rule": "No B4 result may be reported until waveform archive, selected episode list and SHA-256 hashes are recorded in a frozen successor manifest."
+}
