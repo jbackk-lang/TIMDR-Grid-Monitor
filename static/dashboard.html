@@ -161,6 +161,11 @@
   <span class="empty-note" style="margin-left:6px;">parametry kabla dla szacunku żywotności (poniżej)</span>
 </div>
 
+<div class="controls" style="border-radius:8px;">
+  <button id="btnRunTests" class="secondary">🧪 Uruchom pełne testy</button>
+  <span id="testStatus" class="empty-note">Testy nie są uruchamiane przy starcie.</span>
+</div>
+
 <div class="note" id="dataNote">Wybierz scenariusz demo i kliknij "Analizuj".</div>
 
 <div class="cards" id="cardsBox"></div>
@@ -547,9 +552,50 @@ async function analyzeCsv(){
   renderAll(data);
 }
 
+let testPollTimer = null;
+function renderTestStatus(data){
+  const box = document.getElementById('testStatus');
+  if (data.state === 'running') {
+    box.textContent = 'Testy działają w tle — dashboard pozostaje dostępny.';
+  } else if (data.state === 'passed') {
+    box.textContent = '✓ Pełne testy zakończone poprawnie.';
+  } else if (data.state === 'failed') {
+    const lastLine = (data.output || '').trim().split('\n').filter(Boolean).slice(-1)[0] || 'brak szczegółów';
+    box.textContent = '✕ Testy zakończone błędem: ' + lastLine;
+  } else {
+    box.textContent = 'Testy nie są uruchamiane przy starcie.';
+  }
+}
+async function pollTests(){
+  const res = await fetch('/api/tests');
+  const data = await res.json();
+  renderTestStatus(data);
+  if (data.state === 'running') {
+    testPollTimer = setTimeout(() => pollTests().catch(e => showError(e.message)), 1500);
+  } else {
+    testPollTimer = null;
+  }
+}
+async function runTests(){
+  showError('');
+  const button = document.getElementById('btnRunTests');
+  button.disabled = true;
+  try {
+    const res = await fetch('/api/tests', {method:'POST'});
+    const data = await res.json();
+    if (!res.ok && res.status !== 409) throw new Error(data.error || ('HTTP ' + res.status));
+    renderTestStatus(data);
+    if (testPollTimer) clearTimeout(testPollTimer);
+    pollTests().catch(e => showError(e.message));
+  } finally {
+    setTimeout(() => { button.disabled = false; }, 1000);
+  }
+}
+
 document.getElementById('btnAnalyzeDemo').addEventListener('click', () => analyzeDemo().catch(e => showError(e.message)));
 document.getElementById('btnAnalyzeProtect').addEventListener('click', () => analyzeProtect90().catch(e => showError(e.message)));
 document.getElementById('btnAnalyzeCsv').addEventListener('click', () => analyzeCsv().catch(e => showError(e.message)));
+document.getElementById('btnRunTests').addEventListener('click', () => runTests().catch(e => showError(e.message)));
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -566,7 +612,7 @@ window.addEventListener('resize', () => {
   resizeTimer = setTimeout(() => { if (lastData) renderCharts(lastData); }, 150);
 });
 
-Promise.all([loadScenarios(), loadProtect90Samples()]).then(() => analyzeDemo()).catch(e => showError(e.message));
+Promise.all([loadScenarios(), loadProtect90Samples(), pollTests()]).then(() => analyzeDemo()).catch(e => showError(e.message));
 </script>
 </body>
 </html>

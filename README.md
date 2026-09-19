@@ -20,9 +20,17 @@ run.bat
 ```
 
 Skrypt sam znajdzie Pythona (`python` albo `py`), doinstaluje zależności
-(`flask numpy pandas openpyxl pytest`), uruchomi pełny zestaw testów i
-odpali serwer + otworzy dashboard w przeglądarce pod
-`http://127.0.0.1:8070`.
+(`flask numpy pandas openpyxl pytest`) i **od razu** odpali serwer + otworzy
+dashboard pod `http://127.0.0.1:8070`. Testy są celowo pomijane przy zwykłym
+starcie, aby interfejs był dostępny bez czekania.
+
+Pełną walidację można uruchomić później przyciskiem **„🧪 Uruchom pełne testy”**
+w dashboardzie. Działa ona w tle; aplikacja pozostaje dostępna, a wynik jest
+pokazywany obok przycisku i w oknie serwera. Alternatywnie uruchom:
+
+```
+run.bat --full-tests
+```
 
 ## Co robi monitor
 
@@ -251,7 +259,7 @@ TIMDR-Grid-Monitor/
 ├── device_client.py       - bufor + szkielet klientów Modbus/MQTT/REST
 ├── api.py                 - Flask API (port 8070) + serwowanie dashboardu
 ├── static/dashboard.html  - dashboard (ciemny motyw, Canvas 2D, bez CDN)
-├── run.bat                - instalacja zależności + testy + start serwera
+├── run.bat                - instalacja zależności + szybki start serwera
 ├── requirements.txt
 └── test_*.py               - 118 testów pytest (w tym test_ringdown.py)
 ```
@@ -277,6 +285,10 @@ Odpowiedź obu endpointów analizy zawiera, oprócz `signals`/`events`/
 ```
 python -m pytest -q
 ```
+
+Przy zwykłym `run.bat` testy nie blokują startu. W dashboardzie użyj przycisku
+**„🧪 Uruchom pełne testy”** albo uruchom `run.bat --full-tests`, gdy chcesz
+sprawdzić całość przed wydaniem zmian.
 
 120/120 testów przechodzi (`grid_core`, `ringdown`, `grid_monitor`,
 `forecast_core`, `cable_life`, `demo_generator` pośrednio przez

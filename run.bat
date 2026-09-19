@@ -62,25 +62,19 @@ if errorlevel 1 (
 )
 
 echo.
-echo Uruchamiam testy (pytest)...
-rem --- basetemp we wlasnym folderze projektu omija zablokowany/uszkodzony
-rem     C:\Users\<user>\AppData\Local\Temp\pytest-of-<user> na Windows ---
-rem --- Domyslnie pomijamy trzy testy oznaczone slow: analizuja pelne
-rem     60-80 sekundowe slady i sa potrzebne do walidacji wydania, nie do
-rem     kazdorazowego uruchomienia dashboardu. Pelny zestaw:
-rem     run.bat --full-tests
+echo Tryb natychmiastowy: pomijam testy przy starcie.
+echo Pelna walidacja jest dostepna po uruchomieniu z dashboardu
+echo lub recznie: run.bat --full-tests
 if /I "%~1"=="--full-tests" (
-    echo Tryb pelny: uruchamiam takze testy slow.
+    echo Uruchamiam pelny zestaw testow (moze potrwac kilka minut)...
+    rem --- Wlasny katalog tymczasowy omija zablokowany/uszkodzony Temp Windows ---
     %PYCMD% -m pytest -q --basetemp=".pytest_tmp"
-) else (
-    echo Tryb szybki: pomijam testy slow. Pelna walidacja: run.bat --full-tests
-    %PYCMD% -m pytest -q -m "not slow" --basetemp=".pytest_tmp"
-)
-if errorlevel 1 (
-    echo.
-    echo UWAGA: co najmniej jeden test nie przeszedl. Serwer uruchomi
-    echo sie mimo to, ale sprawdz powyzsze wyniki testow.
-    echo.
+    if errorlevel 1 (
+        echo.
+        echo UWAGA: co najmniej jeden test nie przeszedl. Serwer uruchomi
+        echo sie mimo to, ale sprawdz powyzsze wyniki testow.
+        echo.
+    )
 )
 
 echo.

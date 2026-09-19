@@ -44,7 +44,10 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import tempfile
+import threading
 
 import numpy as np
 from flask import Flask, jsonify, request, send_from_directory
@@ -58,6 +61,32 @@ from meta_adapter import build_grid_meta_series, CHANNEL_NAMES, MetaOperatorM, W
 from protect90_adapter import Protect90Error, load_protect90_episode
 
 _meta_operator = MetaOperatorM()
+_test_lock = threading.Lock()
+_test_run = {"state": "idle", "returncode": None, "output": ""}
+
+
+def _run_tests_in_background() -> None:
+    """Run pytest outside Flask's request thread; dashboard polls the result."""
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "--basetemp=.pytest_tmp_ui"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        output = (completed.stdout + "\n" + completed.stderr).strip()
+        with _test_lock:
+            _test_run.update({
+                "state": "passed" if completed.returncode == 0 else "failed",
+                "returncode": completed.returncode,
+                "output": output[-12000:],
+            })
+    except Exception as exc:  # defensive: never let a diagnostic task kill the API
+        with _test_lock:
+            _test_run.update({"state": "failed", "returncode": None, "output": str(exc)})
 
 # Parametry CableSpec, które wolno nadpisać z żądania HTTP (nazwa -> typ konwersji)
 _CABLE_PARAM_TYPES = {
@@ -279,6 +308,23 @@ def dashboard():
 @app.route("/api/health")
 def health():
     return jsonify({"status": "ok", "disclaimer": DISCLAIMER})
+
+
+@app.route("/api/tests", methods=["GET", "POST"])
+def tests():
+    """Start one full local pytest run or return its latest status.
+
+    The server binds only to 127.0.0.1, so this is deliberately a local
+    convenience feature rather than a remotely exposed command runner.
+    """
+    if request.method == "POST":
+        with _test_lock:
+            if _test_run["state"] == "running":
+                return jsonify(_test_run), 409
+            _test_run.update({"state": "running", "returncode": None, "output": ""})
+        threading.Thread(target=_run_tests_in_background, daemon=True).start()
+    with _test_lock:
+        return jsonify(dict(_test_run))
 
 
 @app.route("/api/scenarios")
