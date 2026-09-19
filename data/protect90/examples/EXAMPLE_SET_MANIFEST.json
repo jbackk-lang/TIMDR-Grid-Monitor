@@ -1,0 +1,49 @@
+{
+  "dataset": "PROTECT-90 v1.0.0",
+  "doi": "10.5281/zenodo.21109169",
+  "license": "CC-BY-4.0",
+  "selection_rule": "two lowest frozen sample IDs per sc_type; display examples only",
+  "n_examples": 8,
+  "examples": [
+    {
+      "sample_id": 59,
+      "filename": "59_sample_hv_double_line_90kv.pkl",
+      "sha256": "0a911b0219fd9857d485b5eacc72923edff9ff24ee179295b9e6bb9c2787f9d3"
+    },
+    {
+      "sample_id": 61,
+      "filename": "61_sample_hv_double_line_90kv.pkl",
+      "sha256": "eaeff6e1548e2fce4219f4711ab08e84a8ce5465a916005e38ce3c7806d3914e"
+    },
+    {
+      "sample_id": 4,
+      "filename": "4_sample_hv_double_line_90kv.pkl",
+      "sha256": "8c03a65b4f1f2823202abc2bc8ce9a391aab01a95ee651e149b1b24cc029c4fd"
+    },
+    {
+      "sample_id": 80,
+      "filename": "80_sample_hv_double_line_90kv.pkl",
+      "sha256": "c2415723dcf15927e9c6aae436b953a6345660c572b8d2087b7f54c4730fd6d8"
+    },
+    {
+      "sample_id": 173,
+      "filename": "173_sample_hv_double_line_90kv.pkl",
+      "sha256": "b733f6d06d6b9b730b78605e27cde7e0dcbc2584709dbfed7672b76ac66eea6a"
+    },
+    {
+      "sample_id": 369,
+      "filename": "369_sample_hv_double_line_90kv.pkl",
+      "sha256": "093e28d679aeec660d2f1344ddd468347905761d10bf529a8747849dc9326dd6"
+    },
+    {
+      "sample_id": 68,
+      "filename": "68_sample_hv_double_line_90kv.pkl",
+      "sha256": "355ef01e3afcec4ee59bd1cf098ac0af82ea018d348b36d658247cb5d98f6fc8"
+    },
+    {
+      "sample_id": 69,
+      "filename": "69_sample_hv_double_line_90kv.pkl",
+      "sha256": "a6ae4b8bd4ac210e8f39d166a4002b58ec23831174d46a3dffaf03efec44d1d1"
+    }
+  ]
+}

@@ -316,6 +316,20 @@ def _protect90_paths() -> tuple[str, str]:
     return root, os.path.join(root, "B4_GRID_PROTECT90_FROZEN_EPISODE_IDS.json")
 
 
+def _protect90_example_root() -> str:
+    return os.path.join(os.path.dirname(__file__), "data", "protect90", "examples")
+
+
+def _protect90_data_root(sample_id: int, frozen_root: str) -> str:
+    filename = f"{sample_id}_sample_hv_double_line_90kv.pkl"
+    if os.path.isfile(os.path.join(frozen_root, "preprocessed_data", filename)):
+        return frozen_root
+    examples_root = _protect90_example_root()
+    if os.path.isfile(os.path.join(examples_root, "preprocessed_data", filename)):
+        return examples_root
+    return frozen_root
+
+
 @app.route("/api/protect90/samples")
 def protect90_samples():
     root, selection_path = _protect90_paths()
@@ -325,13 +339,16 @@ def protect90_samples():
         ids = json.load(handle)["sample_ids"]
     available = [
         sample_id for sample_id in ids
-        if os.path.isfile(os.path.join(root, "preprocessed_data", f"{sample_id}_sample_hv_double_line_90kv.pkl"))
+        if os.path.isfile(os.path.join(
+            _protect90_data_root(sample_id, root), "preprocessed_data",
+            f"{sample_id}_sample_hv_double_line_90kv.pkl"
+        ))
     ]
     return jsonify({
         "samples": available,
         "n_frozen": len(ids),
         "n_available": len(available),
-        "note": "PROTECT-90: symulowane EMT, nie dane terenowe. Przykłady są lokalne i zamrożone.",
+        "note": "PROTECT-90: symulowane EMT, nie dane terenowe. Po klonowaniu dostępnych jest 8 małych przykładów; lokalnie może być pełna selekcja 512 epizodów.",
     })
 
 
@@ -350,7 +367,8 @@ def protect90_demo():
         return jsonify({"error": "Wybrany epizod nie należy do zamrożonej listy."}), 400
     try:
         signals, sample_rate_hz, provenance = load_protect90_episode(
-            root, sample_id, request.args.get("location") or None
+            _protect90_data_root(sample_id, root),
+            sample_id, request.args.get("location") or None
         )
         # PROTECT-90 nie podaje znamionowej mocy dla tego proxy. Próg jest
         # jawnie wyprowadzony z bieżącego przykładu i służy tylko wizualizacji.
