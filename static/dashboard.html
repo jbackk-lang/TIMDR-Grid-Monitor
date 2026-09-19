@@ -106,6 +106,7 @@
 
 <div class="tabs">
   <button class="tab-btn active" data-tab="demo">🎲 Dane demo</button>
+  <button class="tab-btn" data-tab="protect">⚡ PROTECT-90</button>
   <button class="tab-btn" data-tab="csv">📄 Import CSV/Excel</button>
   <button class="tab-btn" data-tab="device">🔌 Realne urządzenie</button>
 </div>
@@ -117,6 +118,13 @@
   <input type="number" id="inRatedLoad" value="10000" min="1">
   <button id="btnAnalyzeDemo">▶ Analizuj</button>
   <span id="err"></span>
+</div>
+
+<div class="controls tab-panel" id="tabProtect" style="border-radius:0 8px 8px 8px;">
+  <label>zamrożony epizod zwarcia</label>
+  <select id="inProtectEpisode"></select>
+  <button id="btnAnalyzeProtect">▶ Analizuj PROTECT-90</button>
+  <span class="empty-note">Lokalny przykład EMT 90 kV; nie jest pomiarem terenowym. Wymaga pobranych danych.</span>
 </div>
 
 <div class="controls tab-panel" id="tabCsv" style="border-radius:0 8px 8px 8px;">
@@ -454,8 +462,11 @@ function cableParamsQuery(){
 let lastData = null;
 function renderAll(data){
   lastData = data;
+  const protectLabel = data.source?.provenance
+    ? 'PROTECT-90: epizod ' + data.source.provenance.sample_id + ' (' + data.source.provenance.location + ')'
+    : null;
   document.getElementById('dataNote').textContent =
-    `${data.scenario ? 'Scenariusz: ' + data.scenario : (data.source_file || 'plik')} — ${data.summary.n_samples} próbek, ${fmt(data.summary.duration_s,1)}s @ ${fmt(data.sample_rate_hz,1)}Hz.`;
+    `${data.scenario ? 'Scenariusz: ' + data.scenario : (protectLabel || data.source_file || 'plik')} — ${data.summary.n_samples} próbek, ${fmt(data.summary.duration_s,1)}s @ ${fmt(data.sample_rate_hz,1)}Hz.`;
   setStatus(data.summary);
   renderCards(data);
   renderEvents(data);
@@ -490,6 +501,37 @@ async function analyzeDemo(){
   renderAll(data);
 }
 
+async function loadProtect90Samples(){
+  const res = await fetch('/api/protect90/samples');
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+  const select = document.getElementById('inProtectEpisode');
+  select.innerHTML = '';
+  data.samples.forEach(id => {
+    const option = document.createElement('option');
+    option.value = id;
+    option.textContent = 'epizod ' + id;
+    select.appendChild(option);
+  });
+  if (!data.samples.length) {
+    const option = document.createElement('option');
+    option.textContent = 'Brak lokalnych przebiegów';
+    select.appendChild(option);
+  }
+}
+
+async function analyzeProtect90(){
+  showError('');
+  const sampleId = document.getElementById('inProtectEpisode').value;
+  if (!sampleId) { showError('Brak dostępnego epizodu PROTECT-90'); return; }
+  const params = cableParamsQuery();
+  params.set('sample_id', sampleId);
+  const res = await fetch('/api/protect90/demo?' + params.toString());
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+  renderAll(data);
+}
+
 async function analyzeCsv(){
   showError('');
   const fileInput = document.getElementById('inCsvFile');
@@ -506,6 +548,7 @@ async function analyzeCsv(){
 }
 
 document.getElementById('btnAnalyzeDemo').addEventListener('click', () => analyzeDemo().catch(e => showError(e.message)));
+document.getElementById('btnAnalyzeProtect').addEventListener('click', () => analyzeProtect90().catch(e => showError(e.message)));
 document.getElementById('btnAnalyzeCsv').addEventListener('click', () => analyzeCsv().catch(e => showError(e.message)));
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -523,7 +566,7 @@ window.addEventListener('resize', () => {
   resizeTimer = setTimeout(() => { if (lastData) renderCharts(lastData); }, 150);
 });
 
-loadScenarios().then(() => analyzeDemo()).catch(e => showError(e.message));
+Promise.all([loadScenarios(), loadProtect90Samples()]).then(() => analyzeDemo()).catch(e => showError(e.message));
 </script>
 </body>
 </html>

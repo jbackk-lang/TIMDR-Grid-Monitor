@@ -16,6 +16,8 @@ Endpointy:
   GET  /api/health
   GET  /api/scenarios     -> lista dostępnych scenariuszy demo
   GET  /api/demo          -> analiza scenariusza syntetycznego (?scenario=...&rated_load=...&<cable_params>)
+  GET  /api/protect90/samples -> lokalnie dostępne, zamrożone przykłady PROTECT-90
+  GET  /api/protect90/demo    -> analiza jednego zamrożonego epizodu PROTECT-90
   POST /api/csv           -> analiza wgranego pliku CSV/Excel (multipart/form-data, + <cable_params>)
 
 Oba endpointy analizy (`/api/demo`, `/api/csv`) dodatkowo zwracają:
@@ -40,6 +42,7 @@ Oba endpointy analizy (`/api/demo`, `/api/csv`) dodatkowo zwracają:
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 
@@ -52,6 +55,7 @@ from csv_loader import load_csv, CsvLoaderError
 from forecast_core import TimdrEnergyPredictor, TimdrEnergyForecastEvents, TimdrEnergyForecaster
 from cable_life import CableSpec, estimate_remaining_life
 from meta_adapter import build_grid_meta_series, CHANNEL_NAMES, MetaOperatorM, WINDOW_SECONDS, ROLLING_HISTORY_SECONDS
+from protect90_adapter import Protect90Error, load_protect90_episode
 
 _meta_operator = MetaOperatorM()
 
@@ -209,13 +213,20 @@ def _summary(events: TimdrEnergyEvents, n_samples: int, sample_rate_hz: float) -
     }
 
 
-def _run_analysis(signals: TimdrEnergySignals, sample_rate_hz: float, rated_load: float, cable_params: dict | None = None) -> dict:
-    monitor = TimdrEnergyMonitor(v_nominal=V_NOMINAL, f_nominal=F_NOMINAL, rated_load=rated_load)
+def _run_analysis(
+    signals: TimdrEnergySignals,
+    sample_rate_hz: float,
+    rated_load: float,
+    cable_params: dict | None = None,
+    v_nominal: float = V_NOMINAL,
+    f_nominal: float = F_NOMINAL,
+) -> dict:
+    monitor = TimdrEnergyMonitor(v_nominal=v_nominal, f_nominal=f_nominal, rated_load=rated_load)
     events = monitor.analyze(signals, sample_rate_hz)
 
     predictor = TimdrEnergyPredictor()
     prediction = predictor.predict_next(signals.voltage, signals.frequency, signals.load, signals.harmonics)
-    forecaster = TimdrEnergyForecaster(rated_load=rated_load, v_nominal=V_NOMINAL, f_nominal=F_NOMINAL)
+    forecaster = TimdrEnergyForecaster(rated_load=rated_load, v_nominal=v_nominal, f_nominal=f_nominal)
     forecast_events = forecaster.analyze_prediction(prediction, recent_harmonics=signals.harmonics)
 
     spec = CableSpec(rated_load_w=rated_load, **(cable_params or {}))
@@ -297,6 +308,67 @@ def demo():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     result["scenario"] = scenario
+    return jsonify(_clean(result))
+
+
+def _protect90_paths() -> tuple[str, str]:
+    root = os.path.join(os.path.dirname(__file__), "data", "protect90", "frozen")
+    return root, os.path.join(root, "B4_GRID_PROTECT90_FROZEN_EPISODE_IDS.json")
+
+
+@app.route("/api/protect90/samples")
+def protect90_samples():
+    root, selection_path = _protect90_paths()
+    if not os.path.isfile(selection_path):
+        return jsonify({"error": "Brak zamrożonej listy PROTECT-90."}), 404
+    with open(selection_path, encoding="utf-8") as handle:
+        ids = json.load(handle)["sample_ids"]
+    available = [
+        sample_id for sample_id in ids
+        if os.path.isfile(os.path.join(root, "preprocessed_data", f"{sample_id}_sample_hv_double_line_90kv.pkl"))
+    ]
+    return jsonify({
+        "samples": available,
+        "n_frozen": len(ids),
+        "n_available": len(available),
+        "note": "PROTECT-90: symulowane EMT, nie dane terenowe. Przykłady są lokalne i zamrożone.",
+    })
+
+
+@app.route("/api/protect90/demo")
+def protect90_demo():
+    root, selection_path = _protect90_paths()
+    try:
+        sample_id = int(request.args.get("sample_id", ""))
+    except ValueError:
+        return jsonify({"error": "sample_id musi być liczbą całkowitą"}), 400
+    if not os.path.isfile(selection_path):
+        return jsonify({"error": "Brak zamrożonej listy PROTECT-90."}), 404
+    with open(selection_path, encoding="utf-8") as handle:
+        frozen_ids = set(json.load(handle)["sample_ids"])
+    if sample_id not in frozen_ids:
+        return jsonify({"error": "Wybrany epizod nie należy do zamrożonej listy."}), 400
+    try:
+        signals, sample_rate_hz, provenance = load_protect90_episode(
+            root, sample_id, request.args.get("location") or None
+        )
+        # PROTECT-90 nie podaje znamionowej mocy dla tego proxy. Próg jest
+        # jawnie wyprowadzony z bieżącego przykładu i służy tylko wizualizacji.
+        rated_load_proxy = float(np.max(signals.load) * 1.10)
+        v_nominal_proxy = float(np.median(signals.voltage))
+        result = _run_analysis(
+            signals, sample_rate_hz, rated_load_proxy,
+            _parse_cable_params(request.args),
+            v_nominal=v_nominal_proxy, f_nominal=50.0,
+        )
+    except (FileNotFoundError, Protect90Error, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    result["source"] = {
+        "kind": "PROTECT-90 frozen local example",
+        "provenance": provenance,
+        "rated_load_proxy": rated_load_proxy,
+        "warning": "load jest proxy mocy pozornej; alarm przeciążenia ma charakter demonstracyjny.",
+    }
     return jsonify(_clean(result))
 
 
