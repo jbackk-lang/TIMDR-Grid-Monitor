@@ -176,6 +176,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from grid_monitor import TimdrEnergySignals
+from vendor.grid_meta_core import MetaOperatorM, MetaState
+from vendor.grid_seismic import SeismicMetaResult, build_meta_series_from_waveform
+from vendor.grid_seismic_core import TIMDR_EarthquakeCore
 
 # ZWENDOROWANE 2026-09-10 (patrz nagłówki plików `_vendor_*.py` w tym
 # repo dla pełnego uzasadnienia): wcześniej ten moduł ładował
