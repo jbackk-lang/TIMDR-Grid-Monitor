@@ -31,16 +31,19 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------
-# sys.path -- reuzycie spectral_family.py bez kopiowania kodu. Oba
-# repo maja identyczna tresc pliku (patrz naglowek zadania) -- probuj
-# najpierw samodzielne repo TIMDR-Geometry-Formalism (siostrzane wobec
-# TIMDR-Grid-Monitor), potem kopie zagniezdzona w GIA-TIMDR.
+# sys.path -- reuzycie spectral_family.py ORAZ timdr_formalism.pipeline
+# bez kopiowania kodu. Oba repo (TIMDR-Geometry-Formalism,
+# TIMDR-Math-Formalism) istnieja w dwoch lokalizacjach -- probuj
+# najpierw samodzielne repo siostrzane wobec TIMDR-Grid-Monitor, potem
+# kopie zagniezdzona w GIA-TIMDR (ten sam wzorzec co ponizej dla
+# spectral_family, patrz `timdr_time/_bootstrap.py` w
+# TIMDR-Time-Formalism po analogiczny wzorzec "sibling-repos").
 # ---------------------------------------------------------------------
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -60,6 +63,34 @@ else:
     )
 
 import spectral_family as sf  # noqa: E402
+
+# timdr_formalism JEST prawdziwym pakietem Pythona (ma __init__.py), wiec
+# na sys.path trzeba wstawic KORZEN repo (katalog NADRZEDNY wobec
+# `timdr_formalism/`), nie sam katalog pakietu -- w odroznieniu od
+# spectral_family.py wyzej, ktory jest pojedynczym plikiem importowanym
+# bezposrednio (plaski import, bez pakietu).
+_TF_CANDIDATES = [
+    os.path.join(_PARENT, "TIMDR-Math-Formalism"),
+    os.path.join(_PARENT, "GIA-TIMDR", "TIMDR-Math-Formalism"),
+]
+for _tf_c in _TF_CANDIDATES:
+    if os.path.isdir(_tf_c) and _tf_c not in sys.path:
+        sys.path.insert(0, _tf_c)
+        break
+else:
+    raise ImportError(
+        "Nie znaleziono pakietu timdr_formalism w zadnej ze znanych "
+        "lokalizacji: " + ", ".join(_TF_CANDIDATES)
+    )
+
+# Test Wilcoxona sparowany -- kanoniczna implementacja (ze znaleziona i
+# naprawiona w TEJ sesji poprawka bledu znaku scipy) zyje teraz w
+# timdr_formalism/pipeline.py::paired_wilcoxon_test, WSPOLNA dla
+# wszystkich mostow GIA-TIMDR, nie tylko PROTECT-90 -- patrz obszerna
+# uwaga o `z=-abs(z)` w scipy nad ta funkcja w pipeline.py.
+from timdr_formalism.pipeline import (  # noqa: E402
+    paired_wilcoxon_test as _tf_paired_wilcoxon_test,
+)
 
 try:
     from scipy import stats as _scipy_stats
@@ -91,124 +122,50 @@ RAW_RESULTS_PATH = Path(_THIS_DIR) / "protect90_membrane_raw_results.json"
 
 
 # ---------------------------------------------------------------------
-# Test Wilcoxona sparowany -- backend scipy z fallback numpy (ta sama
-# dyscyplina "bezpieczenstwo importu scipy" co
-# timdr_formalism/pipeline.py::mann_whitney_test, port logiki na
-# przypadek sparowany zamiast dwoch niezaleznych grup).
+# Test Wilcoxona sparowany -- CIENKI WRAPPER na kanoniczna implementacje
+# w `timdr_formalism.pipeline.paired_wilcoxon_test` (wydzielona tam z
+# TEGO pliku podczas tej sesji, PO tym jak zostal tu znaleziony i
+# naprawiony blad znaku `scipy.stats.wilcoxon` -- patrz obszerna uwaga
+# nad `paired_wilcoxon_test` w pipeline.py po pelny opis bledu
+# `z=-abs(z)` scipy dla testu two-sided oraz uzasadnienie, dlaczego znak
+# liczony jest wlasna implementacja, a scipy sluzy WYLACZNIE jako
+# cross-check p-wartosci). Ten wrapper istnieje TYLKO po to, zeby
+# zachowac dokladnie ten sam ksztalt dict (`t["pvalue"]`,
+# `t["effect_size_r"]`, `t.get("inconclusive")`, ...), ktorego
+# oczekuja `analyze()`/`classify()` ponizej w tym pliku -- logika
+# matematyczna w calosci zyje teraz w pipeline.py, NIE tutaj.
 # ---------------------------------------------------------------------
-
-
-def _wilcoxon_numpy(d_nz: np.ndarray) -> Tuple[float, float]:
-    """Dwustronny test Wilcoxona ze znakiem rang, aproksymacja
-    normalna z korekta na remisy, bez korekty ciaglosci -- zgodne co
-    do kilku miejsc po przecinku ze `scipy.stats.wilcoxon(method="approx",
-    correction=False)`."""
-    n = len(d_nz)
-    if n == 0:
-        return float("nan"), 1.0
-    abs_d = np.abs(d_nz)
-    order = np.argsort(abs_d, kind="mergesort")
-    sorted_vals = abs_d[order]
-    ranks = np.empty(n, dtype=float)
-    i = 0
-    rank_cursor = 1
-    tie_term = 0.0
-    while i < n:
-        j = i
-        while j + 1 < n and sorted_vals[j + 1] == sorted_vals[i]:
-            j += 1
-        t = j - i + 1
-        avg_rank = (rank_cursor + rank_cursor + (t - 1)) / 2.0
-        ranks[order[i:j + 1]] = avg_rank
-        tie_term += t ** 3 - t
-        rank_cursor += t
-        i = j + 1
-
-    r_plus = float(ranks[d_nz > 0].sum())
-    mu = n * (n + 1) / 4.0
-    sigma2 = n * (n + 1) * (2 * n + 1) / 24.0 - tie_term / 48.0
-    sigma = math.sqrt(sigma2) if sigma2 > 0 else 0.0
-    if sigma == 0:
-        return 0.0, 1.0
-    z = (r_plus - mu) / sigma
-    p = math.erfc(abs(z) / math.sqrt(2.0))
-    return z, min(1.0, p)
 
 
 def paired_wilcoxon_test(event_values: np.ndarray, baseline_values: np.ndarray) -> Dict:
     """Test Wilcoxona ze znakiem rang (sparowany, dwustronny) miedzy
     `event_values` (test) i `baseline_values` (tlo), sparowane PO
-    INDEKSIE (ten sam epizod). Zwraca dict z p-wartoscia, statystyka z,
-    rozmiarem efektu (macierzowo-parowany rank-biserial `r=z/sqrt(n)`),
+    INDEKSIE (ten sam epizod). Deleguje do
+    `timdr_formalism.pipeline.paired_wilcoxon_test` i konwertuje zwrocony
+    `TestResult` (dataclass) na dict o DOKLADNIE tych samych kluczach co
+    poprzednia (inline) implementacja tego modulu -- p-wartosc,
+    statystyka z, rozmiar efektu (rank-biserial dla par `r=z/sqrt(n)`),
     liczba par, liczba par niezerowych (po usunieciu remisow
     baseline==event, konwencja `zero_method="wilcox"`)."""
-    event_values = np.asarray(event_values, dtype=float)
-    baseline_values = np.asarray(baseline_values, dtype=float)
-    valid = ~(np.isnan(event_values) | np.isnan(baseline_values))
-    event_v = event_values[valid]
-    baseline_v = baseline_values[valid]
-    n_pairs = int(valid.sum())
-
-    diff = event_v - baseline_v
-    nz_mask = diff != 0
-    n_nonzero = int(nz_mask.sum())
-
-    if n_nonzero < 10:
-        return {
-            "n_pairs": n_pairs,
-            "n_nonzero": n_nonzero,
-            "n_nan_dropped": int((~valid).sum()),
-            "pvalue": float("nan"),
-            "zstatistic": float("nan"),
-            "effect_size_r": float("nan"),
-            "median_event": float(np.median(event_v)) if n_pairs else float("nan"),
-            "median_baseline": float(np.median(baseline_v)) if n_pairs else float("nan"),
-            "inconclusive": True,
-            "reason": f"za malo niezerowych par ({n_nonzero} < 10)",
-        }
-
-    # UWAGA (odkryte podczas tej sesji, PRZED interpretacja wynikow):
-    # `scipy.stats.wilcoxon(..., alternative="two-sided", method="approx")`
-    # zwraca `zstatistic` PRZEPUSZCZONY przez `z = -abs(z)` (patrz
-    # scipy/stats/_wilcoxon.py, linia z komentarzem "for backward
-    # compatibility") -- dla testu dwustronnego znak `zstatistic` jest
-    # WIEC ZAWSZE ujemny, niezaleznie od kierunku efektu. Uzycie tego
-    # znaku wprost jako kierunku byloby cichym bledem (wszystkie efekty
-    # wyszlyby "ujemne"). Dlatego kierunek/rozmiar efektu liczony jest
-    # WLASNA implementacja (`_wilcoxon_numpy`, r_plus-mu przed folda,
-    # zweryfikowana empirycznie: dla syntetycznego "event=baseline+2"
-    # daje z=+7.43, dokladnie |z| scipy z poprawnym znakiem) -- scipy
-    # (jesli dostepne) uzywany WYLACZNIE jako niezalezny cross-check
-    # p-wartosci (musi zgadzac sie co do kilku miejsc po przecinku),
-    # nie jako zrodlo znaku.
-    z, p = _wilcoxon_numpy(diff[nz_mask])
-    if _HAS_SCIPY:
-        res = _scipy_stats.wilcoxon(
-            event_v[nz_mask], baseline_v[nz_mask],
-            alternative="two-sided", method="approx", zero_method="wilcox",
-            correction=False,
-        )
-        p_scipy = float(res.pvalue)
-        if not math.isclose(p, p_scipy, rel_tol=1e-6, abs_tol=1e-12):
-            raise RuntimeError(
-                f"Rozbieznosc miedzy wlasna implementacja Wilcoxona (p={p!r}) "
-                f"a scipy (p={p_scipy!r}) -- cross-check nie zgadza sie, "
-                "nie ufaj wynikowi."
-            )
-
-    r = z / math.sqrt(n_nonzero)
-
-    return {
-        "n_pairs": n_pairs,
-        "n_nonzero": n_nonzero,
-        "n_nan_dropped": int((~valid).sum()),
-        "pvalue": p,
-        "zstatistic": z,
-        "effect_size_r": r,
-        "median_event": float(np.median(event_v)),
-        "median_baseline": float(np.median(baseline_v)),
-        "inconclusive": False,
+    result = _tf_paired_wilcoxon_test(event_values, baseline_values)
+    out: Dict = {
+        "n_pairs": result.n_test,
+        "n_nonzero": result.n_nonzero,
+        "n_nan_dropped": result.n_nan_dropped,
+        "pvalue": result.pvalue,
+        "zstatistic": result.statistic,
+        "effect_size_r": result.effect_size_r,
+        "median_event": result.median_test,
+        "median_baseline": result.median_background,
+        "inconclusive": result.inconclusive,
     }
+    if result.inconclusive:
+        # Ta sama konwencja co poprzednia inline implementacja: klucz
+        # "reason" obecny WYLACZNIE w galezi inconclusive (nie zawsze),
+        # zeby nie zmieniac ksztaltu dict, ktorego moga oczekiwac
+        # istniejace testy/raporty.
+        out["reason"] = result.reason
+    return out
 
 
 def effect_size_label(r: float) -> str:
