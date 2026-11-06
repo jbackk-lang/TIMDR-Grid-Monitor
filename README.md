@@ -13,6 +13,21 @@ kabla/linii pod danym profilem obciążenia.
 > 50160 - przed użyciem produkcyjnym dostosuj do parametrów własnej
 > instalacji.
 
+## Wtyczka TSI · wyniki prób badawczych
+
+Profil TSI analizuje napięcie i prąd w trzech fazach. Testy objęły **512 epizodów symulacji PROTECT‑90**. W każdej rundzie odkładano do sprawdzianu wszystkie epizody z jednej linii, a progi wybierano na innej linii.
+
+| Odtwarzanie całego zapisu | Wtyczka TSI | Próg spadku napięcia |
+|---|---:|---:|
+| Wykrycia w ciągu 80 ms od początku zwarcia | **505/512 (98,6%)** | 501/512 (97,9%) |
+| Epizody z alarmem przed zwarciem | **0/512** | 0/512 |
+| Mediana opóźnienia wykrycia | **7,81 ms** | 7,18 ms |
+| 95. percentyl opóźnienia wykrycia | **14,93 ms** | 12,27 ms |
+
+Analizator używał pierwszych 100 ms jako odniesienia i przesuwał okno 60 ms co 10 ms. Czasy w tabeli pochodzą z osi czasu odtwarzanych pomiarów. W osobnej próbie na oknach wyciętych przy znanym początku zwarcia TSI uzyskało **501/512**, a próg napięciowy **502/512**. Oba warianty miały **0/512** alarmów w porównywanych oknach sprzed zwarcia.
+
+Wtyczka jest eksperymentalna i działa poza panelem. Próby obejmują symulacje zwarć i odcinki przed nimi. Ocena fałszywych alarmów w codziennym monitoringu wymaga dłuższych zapisów normalnej pracy sieci.
+
 ## Uruchomienie
 
 ```
